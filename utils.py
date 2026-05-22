@@ -5,6 +5,12 @@ import pandas as pd
 import streamlit as st
 import fastf1
 
+@st.cache_data(ttl=3600)  # ttl=3600 caches the data for 1 hour
+def safe_load_session(year, race, session_id, telemetry=True, weather=True, messages=True):
+    session = fastf1.get_session(year, race, session_id)
+    session.load(telemetry=telemetry, weather=weather, messages=messages)
+    return session
+
 # ─────────────────────────────────────────────────────────────
 #  TEAM COLOURS (Fallback palette for older seasons)
 # ─────────────────────────────────────────────────────────────
