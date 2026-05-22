@@ -79,8 +79,8 @@ PLOTLY_THEME = dict(
     font=dict(family="Exo 2, sans-serif", color="#e8e8f0", size=12),
     xaxis=dict(gridcolor="#2a2a38", linecolor="#2a2a38", zerolinecolor="#2a2a38"),
     yaxis=dict(gridcolor="#2a2a38", linecolor="#2a2a38", zerolinecolor="#2a2a38"),
-    legend=dict(bgcolor="rgba(19,19,26,0.8)", bordercolor="#2a2a38", borderwidth=1),
-    margin=dict(l=50, r=30, t=60, b=50),
+    #legend=dict(bgcolor="rgba(19,19,26,0.8)", bordercolor="#2a2a38", borderwidth=1),
+    #margin=dict(l=50, r=30, t=60, b=50),
 )
 
 
