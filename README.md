@@ -1,4 +1,3 @@
-cat > /mnt/user-data/outputs/README.md << 'READMEEOF'
 <div align="center">
 
 ```
