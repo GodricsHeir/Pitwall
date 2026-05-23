@@ -82,49 +82,55 @@ def tyre_icon(compound):
 # ─────────────────────────────────────────────────────────────
 def _build_ot_active(session, laps):
     """Safely extracts OT/DRS deployment boolean per driver, per lap."""
+    ot_active = {}
     
-    drv_num_map = {}
     for drv in laps['Driver'].unique():
-        d_nums = laps[laps['Driver'] == drv]['DriverNumber'].dropna().unique()
-        if len(d_nums) > 0:
-            try: drv_num_map[drv] = str(int(float(d_nums[0])))
-            except Exception: drv_num_map[drv] = str(d_nums[0])
-
-    car_data = getattr(session, "car_data", {})
-    ot_active = {drv: {} for drv in drv_num_map.keys()}
-
-    if not car_data:
-        return ot_active
-
-    for drv, c_num in drv_num_map.items():
-        cd = None
+        ot_active[drv] = {}
+        drv_laps = laps[laps['Driver'] == drv]
         
-        if c_num in car_data: cd = car_data[c_num]
-        elif int(c_num) in car_data: cd = car_data[int(c_num)]
-        elif str(c_num) in car_data: cd = car_data[str(c_num)]
-        
-        if cd is None or "DRS" not in cd.columns: 
-            continue
-
-        cd_ot_open = cd[cd["DRS"] >= 8]
-        drv_laps = laps[laps["Driver"] == drv]
-
-        for _, lap in drv_laps.iterrows():
-            try: 
-                lap_num = int(float(lap['LapNumber']))
-            except Exception: 
-                continue
-
-            ls, le = lap.get('LapStartTime'), lap.get('Time')
-            if pd.isna(ls) or pd.isna(le):
-                ot_active[drv][lap_num] = False
-                continue
-
-            lap_window = cd_ot_open[(cd_ot_open['Time'] >= ls) & (cd_ot_open['Time'] <= le)]
-            ot_active[drv][lap_num] = len(lap_window) > 0
-
+        try:
+            cd = None
+            # FastF1 3.0+ modern syntax
+            if hasattr(drv_laps, "get_car_data"):
+                cd = drv_laps.get_car_data()
+            # FastF1 2.x legacy fallback
+            elif hasattr(session, "car_data"):
+                d_nums = drv_laps['DriverNumber'].dropna().unique()
+                if len(d_nums) > 0:
+                    c_num = str(int(float(d_nums[0])))
+                    cd = session.car_data.get(c_num, None)
+            
+            # If we successfully extracted car telemetry and the DRS channel exists
+            if cd is not None and not cd.empty and "DRS" in cd.columns:
+                # F1 Telemetry DRS values: 0/1 (Off), 8 (Eligible/Zone), 10/12/14 (Flap Open)
+                cd_ot_open = cd[cd["DRS"] >= 10]
+                
+                time_col = 'SessionTime' if 'SessionTime' in cd_ot_open.columns else 'Time'
+                
+                for _, lap in drv_laps.iterrows():
+                    try: lap_num = int(float(lap['LapNumber']))
+                    except: continue
+                    
+                    ls, le = lap.get('LapStartTime'), lap.get('Time')
+                    if pd.isna(ls) or pd.isna(le):
+                        ot_active[drv][lap_num] = False
+                        continue
+                        
+                    # Slice the DRS-open telemetry to this exact lap's timeframe
+                    lap_window = cd_ot_open[(cd_ot_open[time_col] >= ls) & (cd_ot_open[time_col] <= le)]
+                    ot_active[drv][lap_num] = len(lap_window) > 0
+            else:
+                for _, lap in drv_laps.iterrows():
+                    try: ot_active[drv][int(float(lap['LapNumber']))] = False
+                    except: pass
+                    
+        except Exception:
+            # Silently fail and default to False if a sensor drops out
+            for _, lap in drv_laps.iterrows():
+                try: ot_active[drv][int(float(lap['LapNumber']))] = False
+                except: pass
+                
     return ot_active
-
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 1A — RACE ENGINE (Dynamic Telemetry)
