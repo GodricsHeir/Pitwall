@@ -718,6 +718,29 @@ def render_static_classification(year, race, session_id):
     
     # ── BUG FIX 1: Strip duplicate columns ──
     df = df.loc[:, ~df.columns.duplicated()].copy()
+
+    # ── Add Grid Position and Grid Delta ──
+    has_grid = False
+    if "GridPosition" in df.columns and "Position" in df.columns:
+        has_grid = True
+        def format_grid(g):
+            try: 
+                v = float(g)
+                return int(v) if v > 0 else "PL"
+            except: return "—"
+        df["Grid"] = df["GridPosition"].apply(format_grid)
+        
+        def calc_delta(row):
+            try:
+                g = float(row["GridPosition"])
+                p = float(row["Position"])
+                if g <= 0 or pd.isna(p): return "—" # Pit lane start or DNF without valid pos
+                d = g - p
+                if d > 0: return f"↑ {int(d)}"
+                elif d < 0: return f"↓ {int(abs(d))}"
+                return "–"
+            except: return "—"
+        df["Grid Δ"] = df.apply(calc_delta, axis=1)
     
     # Ensure position is a whole number
     if 'Position' in df.columns:
@@ -726,6 +749,12 @@ def render_static_classification(year, race, session_id):
         df['Position'] = df['Position'].apply(lambda x: str(x) if x != 999 else "NC")
     else:
         df['Position'] = "NC"
+
+    # ── Add Points ──
+    has_points = False
+    if "Points" in df.columns:
+        has_points = True
+        df["Pts"] = pd.to_numeric(df["Points"], errors='coerce').fillna(0).astype(int)
         
     cols = ["Position", "Driver", "Team"]
     
@@ -735,7 +764,10 @@ def render_static_classification(year, race, session_id):
                 df[q] = df[q].apply(_fmt_split, is_lap=True)
                 cols.append(q)
     else:
-        # Custom Race Time formatting
+        # Inject our new metrics for Race sessions
+        if has_grid:
+            cols.extend(["Grid", "Grid Δ"])
+            
         def format_race_time(row):
             val = row.get("Time")
             if pd.notna(val) and isinstance(val, pd.Timedelta):
@@ -743,24 +775,36 @@ def render_static_classification(year, race, session_id):
             return str(row.get("Status", "—"))
             
         if "Time" in df.columns and "Status" in df.columns:
-            df["Total Time / Gap"] = df.apply(format_race_time, axis=1)
-            cols.append("Total Time / Gap")
+            df["Time / Status"] = df.apply(format_race_time, axis=1)
+            cols.append("Time / Status")
         elif "Time" in df.columns:
-            df["Total Time / Gap"] = df["Time"].apply(lambda x: _fmt_race_time(x) if isinstance(x, pd.Timedelta) else str(x))
-            cols.append("Total Time / Gap")
+            df["Time / Status"] = df["Time"].apply(lambda x: _fmt_race_time(x) if isinstance(x, pd.Timedelta) else str(x))
+            cols.append("Time / Status")
+            
+        if has_points:
+            cols.append("Pts")
             
     df = df[[c for c in cols if c in df.columns]]
-    
-    # ── BUG FIX 2: Do NOT set_index on Position. This prevents the Styler Crash. ──
     df = df.reset_index(drop=True)
     
-    def driver_bg(val):
-        color = driver_color(val, results)
-        return f'background-color: {color}20; color: {color}; font-weight: bold; border-left: 4px solid {color};'
+    # ── Streamlit DataFrame Styling ──
+    def style_classification(styler):
+        def driver_bg(val):
+            color = driver_color(val, results)
+            return f'background-color: {color}20; color: {color}; font-weight: bold; border-left: 4px solid {color};'
+        
+        def delta_color(val):
+            if isinstance(val, str):
+                if "↑" in val: return 'color: #00d47e; font-weight: bold;'
+                if "↓" in val: return 'color: #e8002d; font-weight: bold;'
+            return 'color: #888;'
 
-    styler = df.style
-    if 'Driver' in df.columns: 
         styler = styler.map(driver_bg, subset=['Driver'])
+        if "Grid Δ" in df.columns:
+            styler = styler.map(delta_color, subset=['Grid Δ'])
+        return styler
+
+    styler = df.style.pipe(style_classification)
         
     # UI Layout with Export Button
     col1, col2 = st.columns([0.8, 0.2])
@@ -776,7 +820,6 @@ def render_static_classification(year, race, session_id):
         )
             
     st.dataframe(styler, use_container_width=True, height=750)
-
 
 # ══════════════════════════════════════════════════════════════
 #  PUBLIC ENTRY POINT (The Unified Hub)
