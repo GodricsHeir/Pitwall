@@ -206,7 +206,7 @@ def render_engineer(year, race, session_id, session_name, eng_driver):
             color = 'rgba(255, 255, 255, 0.35)'
             width = 1.5
             dash = 'dash'
-            trace_name = f"Best (Lap {fastest_lap_num})"
+            trace_name = f"<b>Best</b> (Lap {fastest_lap_num})"
             tel_data = tel_fast
         else:
             color = d_color if col_name != 'Brake' else '#e8002d'
@@ -214,7 +214,7 @@ def render_engineer(year, race, session_id, session_name, eng_driver):
             if col_name == 'nGear': color = '#ffd700'
             width = 2
             dash = 'solid'
-            trace_name = f"Target (Lap {selected_lap_num})"
+            trace_name = f"<b>Target</b> (Lap {selected_lap_num})"
             tel_data = tel_target
 
         line_opts = dict(color=color, width=width, dash=dash)
@@ -272,26 +272,67 @@ def render_engineer(year, race, session_id, session_name, eng_driver):
     add_tel_traces(6, 'Long_G')
 
     # Add zero-line to G-force
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255, 255, 255, 0.3)", row=6, col=1)
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255, 255, 255, 0.4)", row=6, col=1)
+
+    # ── OVERLAY: SECTOR SHADING & LEGEND ICONS ──
+    try:
+        time_col = 'SessionTime' if 'SessionTime' in tel_fast.columns else 'Time'
+        s1_time = fastest_lap.get('Sector1SessionTime')
+        s2_time = fastest_lap.get('Sector2SessionTime')
+        ref_s1 = tel_fast.loc[tel_fast[time_col] <= s1_time, 'Distance'].max() if pd.notna(s1_time) else None
+        ref_s2 = tel_fast.loc[tel_fast[time_col] <= s2_time, 'Distance'].max() if pd.notna(s2_time) else None
+        max_dist = tel_fast['Distance'].max()
+        
+        if ref_s1 and ref_s2 and max_dist:
+            fig.add_vrect(x0=0, x1=ref_s1, fillcolor="rgba(232, 0, 45, 0.08)", layer="below", line_width=0)
+            fig.add_vrect(x0=ref_s1, x1=ref_s2, fillcolor="rgba(63, 182, 220, 0.08)", layer="below", line_width=0)
+            fig.add_vrect(x0=ref_s2, x1=max_dist, fillcolor="rgba(255, 215, 0, 0.06)", layer="below", line_width=0)
+            
+            # Sector Legend Traces
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.5)", size=12, symbol="square"), name="Sector 1", showlegend=True), row=1, col=1)
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(63, 182, 220, 0.5)", size=12, symbol="square"), name="Sector 2", showlegend=True), row=1, col=1)
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.5)", size=12, symbol="square"), name="Sector 3", showlegend=True), row=1, col=1)
+    except Exception:
+        pass
+
+    # ── OVERLAY: CORNER NUMBERS & SEPARATORS ──
+    try:
+        circuit_info = session.get_circuit_info()
+        if circuit_info is not None and not circuit_info.corners.empty:
+            for _, corner in circuit_info.corners.iterrows():
+                dist = corner['Distance']
+                num = str(corner['Number'])
+                fig.add_vline(x=dist, line_width=1.5, line_dash="dot", line_color="rgba(255, 255, 255, 0.35)")
+                fig.add_annotation(
+                    x=dist, y=1.0, yref="paper", text=f"<b>{num}</b>",
+                    showarrow=False, xanchor="left", yanchor="bottom",
+                    font=dict(size=14, color="rgba(255,255,255,0.95)")
+                )
+    except Exception:
+        pass
 
     # ── 6. FORMATTING ────────────────────────────────────
     fig.update_layout(
         **PLOTLY_THEME,
         height=1100,
-        title=f"Telemetry Comparison: Lap {selected_lap_num} vs Fastest Lap ({fastest_lap_num})",
-        hovermode="x unified"
+        title=f"<b>Telemetry Comparison: Lap {selected_lap_num} vs Fastest Lap ({fastest_lap_num})</b>",
+        hovermode="x unified",
+        margin=dict(t=110)
     )
 
-    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_layout(legend=dict(
+        orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1,
+        bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14)
+    ))
 
-    fig.update_yaxes(title_text="Speed", row=1, col=1)
-    fig.update_yaxes(title_text="Throttle", row=2, col=1, range=[-5, 105])
-    fig.update_yaxes(title_text="Brake", row=3, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
-    fig.update_yaxes(title_text="Gear", row=4, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
-    fig.update_yaxes(title_text="RPM", row=5, col=1)
-    fig.update_yaxes(title_text="G-Force", row=6, col=1, range=[-6, 3])
-    
-    fig.update_xaxes(title_text="Track Distance (m)", row=6, col=1)
+    # Bold Axes labels
+    fig.update_yaxes(title_text="<b>Speed (km/h)</b>", row=1, col=1)
+    fig.update_yaxes(title_text="<b>Throttle %</b>", row=2, col=1, range=[-5, 105])
+    fig.update_yaxes(title_text="<b>Brake</b>", row=3, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
+    fig.update_yaxes(title_text="<b>Gear</b>", row=4, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
+    fig.update_yaxes(title_text="<b>RPM</b>", row=5, col=1)
+    fig.update_yaxes(title_text="<b>Long. G</b>", row=6, col=1, range=[-6, 3])
+    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=6, col=1)
 
     st.plotly_chart(fig, use_container_width=True)
 

@@ -584,6 +584,7 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
     )
     
     valid_traces = 0
+    ref_s1, ref_s2, max_dist = None, None, None
     
     for drv in drivers:
         try:
@@ -591,13 +592,25 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
             if pd.isna(f1_lap['LapTime']): continue
             tel = f1_lap.get_telemetry()
             tel = enrich_telemetry(tel)
+            
+            # Extract Sector Boundaries from the first valid driver to paint backgrounds
+            if ref_s1 is None:
+                try:
+                    time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Time'
+                    s1_time = f1_lap.get('Sector1SessionTime')
+                    s2_time = f1_lap.get('Sector2SessionTime')
+                    ref_s1 = tel.loc[tel[time_col] <= s1_time, 'Distance'].max() if pd.notna(s1_time) else None
+                    ref_s2 = tel.loc[tel[time_col] <= s2_time, 'Distance'].max() if pd.notna(s2_time) else None
+                    max_dist = tel['Distance'].max()
+                except Exception:
+                    pass
         except Exception:
             continue
             
         valid_traces += 1
         color = drv_colors[drv]
         lap_num = int(f1_lap['LapNumber'])
-        name_lbl = f"{drv} (Lap {lap_num})"
+        name_lbl = f"<b>{drv}</b> (L{lap_num})"
         
         # Base Speed Trace (SOLID LINES)
         fig.add_trace(go.Scatter(
@@ -647,25 +660,55 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
         st.info("Telemetry data is not available for the selected drivers.")
         return
         
-    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255, 255, 255, 0.3)", row=6, col=1)
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255, 255, 255, 0.4)", row=6, col=1)
+    
+    # ── OVERLAY: SECTOR SHADING & LEGEND ICONS ──
+    if ref_s1 and ref_s2 and max_dist:
+        # Background Regions (No Text)
+        fig.add_vrect(x0=0, x1=ref_s1, fillcolor="rgba(232, 0, 45, 0.08)", layer="below", line_width=0)
+        fig.add_vrect(x0=ref_s1, x1=ref_s2, fillcolor="rgba(63, 182, 220, 0.08)", layer="below", line_width=0)
+        fig.add_vrect(x0=ref_s2, x1=max_dist, fillcolor="rgba(255, 215, 0, 0.06)", layer="below", line_width=0)
+        
+        # Legend Entries for Sectors
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.5)", size=12, symbol="square"), name="Sector 1", showlegend=True), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(63, 182, 220, 0.5)", size=12, symbol="square"), name="Sector 2", showlegend=True), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.5)", size=12, symbol="square"), name="Sector 3", showlegend=True), row=1, col=1)
+
+    # ── OVERLAY: CORNER NUMBERS & SEPARATORS ──
+    try:
+        circuit_info = session.get_circuit_info()
+        if circuit_info is not None and not circuit_info.corners.empty:
+            for _, corner in circuit_info.corners.iterrows():
+                dist = corner['Distance']
+                num = str(corner['Number'])
+                # Bolder, brighter dotted line
+                fig.add_vline(x=dist, line_width=1.5, line_dash="dot", line_color="rgba(255, 255, 255, 0.35)")
+                # Bright, bold corner numbers
+                fig.add_annotation(
+                    x=dist, y=1.0, yref="paper", text=f"<b>{num}</b>",
+                    showarrow=False, xanchor="left", yanchor="bottom",
+                    font=dict(size=14, color="rgba(255,255,255,0.95)")
+                )
+    except Exception:
+        pass 
         
     fig.update_layout(
-        **PLOTLY_THEME, height=1100, title="Head-to-Head: Fastest Lap Telemetry", hovermode="x unified",
-        margin=dict(t=100),
+        **PLOTLY_THEME, height=1100, title="<b>Head-to-Head: Fastest Lap Telemetry</b>", hovermode="x unified",
+        margin=dict(t=110),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.03, xanchor="center", x=0.5,
-            bgcolor="rgba(19, 19, 26, 0.9)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1, font=dict(size=13)
+            orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5,
+            bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14)
         )
     )
     
-    fig.update_yaxes(title_text="Speed", row=1, col=1)
-    fig.update_yaxes(title_text="Throttle", row=2, col=1, range=[-5, 105])
-    fig.update_yaxes(title_text="Brake", row=3, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
-    fig.update_yaxes(title_text="Gear", row=4, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
-    fig.update_yaxes(title_text="RPM", row=5, col=1)
-    fig.update_yaxes(title_text="G-Force", row=6, col=1, range=[-6, 3])
-    
-    fig.update_xaxes(title_text="Track Distance (m)", row=6, col=1)
+    # Bold Axes labels
+    fig.update_yaxes(title_text="<b>Speed (km/h)</b>", row=1, col=1)
+    fig.update_yaxes(title_text="<b>Throttle %</b>", row=2, col=1, range=[-5, 105])
+    fig.update_yaxes(title_text="<b>Brake</b>", row=3, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
+    fig.update_yaxes(title_text="<b>Gear</b>", row=4, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
+    fig.update_yaxes(title_text="<b>RPM</b>", row=5, col=1)
+    fig.update_yaxes(title_text="<b>Long. G</b>", row=6, col=1, range=[-6, 3])
+    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=6, col=1)
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -738,7 +781,7 @@ def _render_trackmap_comparison(session, drivers, drv_colors):
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode='lines',
             line=dict(color=drv_colors[drv], width=5),
-            name=f"{drv} ({perc:.0f}%)"
+            name=f"<b>{drv}</b> ({perc:.0f}%)"
         ))
 
     # 3. Draw Solid Colored Minisectors Over Background
@@ -751,7 +794,7 @@ def _render_trackmap_comparison(session, drivers, drv_colors):
             x=geo_pts['X'], y=geo_pts['Y'], mode='lines',
             line=dict(color=color, width=5),
             hoverinfo='text',
-            text=f"Mini-Sector {s_idx}<br>Dominating: {winner}<br>Avg Speed: {speed:.1f} km/h",
+            text=f"<b>Mini-Sector {s_idx}</b><br>Dominating: {winner}<br>Avg Speed: {speed:.1f} km/h",
             showlegend=False
         ))
 
@@ -763,12 +806,29 @@ def _render_trackmap_comparison(session, drivers, drv_colors):
         name='Start/Finish', hoverinfo='skip'
     ))
 
+    # 5. Outlined Bubble Corner Numbers Overlay
+    try:
+        circuit_info = session.get_circuit_info()
+        if circuit_info is not None and not circuit_info.corners.empty:
+            corners = circuit_info.corners
+            fig.add_trace(go.Scatter(
+                x=corners['X'], y=corners['Y'], mode='markers+text',
+                # This creates a dark bubble with a white outline behind the text
+                marker=dict(size=18, color='#13131a', line=dict(width=1.5, color='rgba(255,255,255,0.7)')),
+                # The text sits perfectly centered inside the bubble
+                text=[f"<b>{n}</b>" for n in corners['Number']], textposition='middle center',
+                textfont=dict(size=10, color='rgba(255,255,255,1)', family="JetBrains Mono"),
+                name='Corners', hoverinfo='skip', showlegend=False
+            ))
+    except Exception:
+        pass
+
     fig.update_layout(
-        **PLOTLY_THEME, height=750, title="Spatial Analysis: Track Map Mini-Sector Dominance", hovermode="closest",
+        **PLOTLY_THEME, height=750, title="<b>Spatial Analysis: Track Map Mini-Sector Dominance</b>", hovermode="closest",
         margin=dict(t=100, b=20, l=20, r=20),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-            bgcolor="rgba(19, 19, 26, 0.9)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1, font=dict(size=13)
+            bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14)
         )
     )
     
