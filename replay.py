@@ -225,10 +225,15 @@ def precalculate_race_data(year, race, session_id):
             is_out = interval == "OUT"
             s1_val, s2_val, s3_val, lt_val = ["—", ""], ["—", ""], ["—", ""], ["—", ""]
             top_spd, avg_spd = "—", "—"
+            pit_status = "NONE"
 
             if not past_drv.empty and not is_out:
                 pb_s1, pb_s2, pb_s3, pb_lt = past_drv['Sector1Time'].min(), past_drv['Sector2Time'].min(), past_drv['Sector3Time'].min(), past_drv['LapTime'].min()
                 cur_lap = past_drv.iloc[-1]
+                
+                # Evaluate PIT logic[cite: 2]
+                if pd.notna(cur_lap.get("PitInTime")): pit_status = "IN"
+                elif pd.notna(cur_lap.get("PitOutTime")): pit_status = "OUT"
                 
                 s1_val = _eval_split(cur_lap.get('Sector1Time'), pb_s1, sb_s1)
                 s2_val = _eval_split(cur_lap.get('Sector2Time'), pb_s2, sb_s2)
@@ -253,6 +258,7 @@ def precalculate_race_data(year, race, session_id):
                 "Grid Δ": pos_delta,
                 "OT": ot_active.get(drv, {}).get(drv_lap, False),
                 "Season2026": int(year) >= 2026,
+                "PitStatus": pit_status,
                 "Interval": interval, "interval_raw": interval_raw, 
                 "S1": s1_val, "S2": s2_val, "S3": s3_val, "LapTime": lt_val,
                 "AvgSpd": avg_spd, "TopSpd": top_spd, "Tyres": tyre_dots, "TyreAge": tyre_age
@@ -375,9 +381,18 @@ def precalculate_quali_data(year, race, session_id):
                 if pd.notna(row.get('LapNumber')):
                     ot_val = ot_active.get(drv, {}).get(int(row['LapNumber']), False)
 
+                # Check driver's current chronological pit status[cite: 2]
+                drv_past = past[past['Driver'] == drv]
+                pit_status = "NONE"
+                if not drv_past.empty:
+                    drv_cur = drv_past.iloc[-1]
+                    if pd.notna(drv_cur.get("PitInTime")): pit_status = "IN"
+                    elif pd.notna(drv_cur.get("PitOutTime")): pit_status = "OUT"
+
                 row_data.append({
                     "Pos": pos, "Driver": drv, "Interval": gap_str, 
                     "OT": ot_val, "Season2026": int(year) >= 2026,
+                    "PitStatus": pit_status,
                     "S1": s1_val, "S2": s2_val, "S3": s3_val, "LapTime": lt_val,
                     "TopSpd": top_spd, "Tyres": tyre_icon(row.get('Compound'))
                 })
@@ -386,6 +401,7 @@ def precalculate_quali_data(year, race, session_id):
                 row_data.append({
                     "Pos": "—", "Driver": drv, "Interval": "NO TIME", 
                     "OT": False, "Season2026": int(year) >= 2026,
+                    "PitStatus": "NONE",
                     "S1": ["—", ""], "S2": ["—", ""], "S3": ["—", ""], "LapTime": ["—", ""], "TopSpd": "—", "Tyres": "—"
                 })
                 
@@ -414,15 +430,23 @@ def _tower_html(tower_df: pd.DataFrame, results: pd.DataFrame, is_quali=False) -
         drv, interval = str(row.get("Driver", "")), str(row.get("Interval", ""))
         dcolor = driver_color(drv, results)
         
+        # ── DRS / OT Logic ──
         badge_label = "OT" if row.get("Season2026", False) else "DRS"
         active_color = "#00d47e"
-
         ot_html = (
             f'<span style="color:{active_color}; border:1px solid {active_color}; padding:1px 4px; border-radius:3px; font-size:0.55rem; margin-left:8px; vertical-align:middle; background:rgba(0,212,126,0.1);">{badge_label}</span>'
-            if bool(row.get("OT", False))
-            else
+            if bool(row.get("OT", False)) else
             f'<span style="color:#555568; border:1px solid #555568; padding:1px 4px; border-radius:3px; font-size:0.55rem; margin-left:8px; vertical-align:middle; background:rgba(120,120,120,0.08);">{badge_label}</span>'
         )
+
+        # ── PIT BUBBLE Logic ──[cite: 2]
+        pit_status = str(row.get("PitStatus", "NONE"))
+        if pit_status == "IN":
+            pit_html = '<span style="color:#e8002d; border:1px solid #e8002d; padding:1px 4px; border-radius:3px; font-size:0.55rem; margin-left:4px; vertical-align:middle; background:rgba(232,0,45,0.15);">PIT</span>'
+        elif pit_status == "OUT":
+            pit_html = '<span style="color:#3fb6dc; border:1px solid #3fb6dc; padding:1px 4px; border-radius:3px; font-size:0.55rem; margin-left:4px; vertical-align:middle; background:rgba(63,182,220,0.15);">OUT</span>'
+        else:
+            pit_html = '<span style="color:#555568; border:1px solid #555568; padding:1px 4px; border-radius:3px; font-size:0.55rem; margin-left:4px; vertical-align:middle; background:rgba(120,120,120,0.08);">PIT</span>'
 
         if interval == "LEADER": int_style, int_text = "color:#ffd700;font-weight:700", "LEADER"
         elif interval in ["OUT", "NO TIME"]: int_style, int_text = "color:#555568;font-style:italic", interval
@@ -455,7 +479,7 @@ def _tower_html(tower_df: pd.DataFrame, results: pd.DataFrame, is_quali=False) -
         rows_html.append(f"""
         <tr style="background:{row_bg};border-bottom:1px solid #1e1e2e">
           <td style="padding:8px 10px;color:#888;font-size:.75rem;width:28px">{pos}</td>
-          <td style="padding:8px 10px;border-left:3px solid {dcolor};color:{dcolor};font-weight:700;letter-spacing:.08em;">{drv}{ot_html}</td>
+          <td style="padding:8px 10px;border-left:3px solid {dcolor};color:{dcolor};font-weight:700;letter-spacing:.08em;">{drv}{ot_html}{pit_html}</td>
           {grid_delta}
           <td style="padding:8px 12px;{int_style};font-size:.8rem;font-family:'JetBrains Mono',monospace;">{int_text}</td>
           {style_td(row.get("S1", ["—", ""]))}
