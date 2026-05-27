@@ -299,13 +299,14 @@ def check_telemetry_support():
 # ─────────────────────────────────────────────
 MODES = [
     ("RESULTS",          "results"),
+    ("STANDINGS",        "champion"),
     ("PACE TRACE",       "pace"),
     ("HEAD-TO-HEAD",     "h2h"),
     ("TEAMMATE DUEL",    "teammate"),
     ("STRATEGY BOARD",   "strategy"),
     ("DRIVER TELEMETRY", "engineer"),
     ("RACE REPLAY",      "replay"),
-    ("STANDINGS",        "champion")
+    ("CIRCUIT ANALYSIS", "circuit")
 ]
 
 tabs = st.tabs([label for label, _ in MODES])
@@ -319,8 +320,14 @@ with tabs[0]:
         import race as race_tab
         race_tab.render_race_results(year, race, session_id, session_name)
 
+# ── CHAMPIONSHIP STANDINGS ──────────────────
+with tabs[1]: # <-- Make sure this changes to 8 since we inserted Circuit at 7
+    st.markdown('<div class="pw-section-label">Championship Tracker</div>', unsafe_allow_html=True)
+    import champion
+    champion.render_championship(year, race, session_id, session_name)
+
 # ── PACE TRACE ──────────────────────────────
-with tabs[1]:
+with tabs[2]:
     st.markdown('<div class="pw-section-label">Single Driver / Grid</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         driver_options = ["ALL"] + available_drivers
@@ -339,7 +346,7 @@ with tabs[1]:
                                      selected_driver, available_drivers, show_annotations)
 
 # ── HEAD-TO-HEAD ────────────────────────────
-with tabs[2]:
+with tabs[3]:
     st.markdown('<div class="pw-section-label">Multi-Driver Comparison</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         if not available_drivers:
@@ -382,7 +389,7 @@ with tabs[2]:
                         compare.render_comparison(year, race, session_id, session_name, final_drivers)
 
 # ── TEAMMATE DUEL ───────────────────────────
-with tabs[3]:
+with tabs[4]:
     st.markdown('<div class="pw-section-label">Teammate Head-to-Head</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         if not available_drivers:
@@ -392,7 +399,7 @@ with tabs[3]:
             teammates.render_teammate_selector(year, race, session_id, session_name, available_drivers)
 
 # ── STRATEGY BOARD ──────────────────────────
-with tabs[4]:
+with tabs[5]:
     st.markdown('<div class="pw-section-label">Race Strategy Overview</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         if not available_drivers:
@@ -404,7 +411,7 @@ with tabs[4]:
                     strategy.render_strategy(year, race, session_id, session_name)
 
 # ── RACE ENGINEER ───────────────────────────
-with tabs[5]:
+with tabs[6]:
     st.markdown('<div class="pw-section-label">Race Engineer Dashboard</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         if not available_drivers:
@@ -420,7 +427,7 @@ with tabs[5]:
                 engineer.render_engineer(year, race, session_id, session_name, eng_driver)
 
 # ── RACE REPLAY ─────────────────────────────
-with tabs[6]:
+with tabs[7]:
     st.markdown('<div class="pw-section-label">Race Replay Engine</div>', unsafe_allow_html=True)
     if check_telemetry_support():
         if not available_drivers:
@@ -430,8 +437,12 @@ with tabs[6]:
             import replay
             replay.render_replay(year, race, session_id, session_name)
 
-# ── CHAMPIONSHIP STANDINGS ──────────────────
-with tabs[7]:
-    st.markdown('<div class="pw-section-label">Championship Tracker</div>', unsafe_allow_html=True)
-    import champion
-    champion.render_championship(year, race, session_id, session_name)
+# ── CIRCUIT ANALYSIS ────────────────────────
+with tabs[8]:
+    st.markdown('<div class="pw-section-label">Track Walk & Engineering</div>', unsafe_allow_html=True)
+    if check_telemetry_support():
+        st.divider()
+        with st.spinner("Mapping circuit topography and corner data…"):
+            import circuit
+            circuit.render_circuit(year, race, session_id, session_name, available_drivers)
+
