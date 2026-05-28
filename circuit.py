@@ -85,10 +85,61 @@ def parse_track_status(status_str):
 
 
 # ─────────────────────────────────────────────────────────────
+#  SPATIAL OVERTAKE ENGINE
+# ─────────────────────────────────────────────────────────────
+def get_spatial_overtakes(session, ref_tel, results_df):
+    """Maps every overtake mathematically to the exact braking zone it occurred in."""
+    braking = ref_tel[ref_tel['Long_G'] < -1.5].copy()
+    if braking.empty: return pd.DataFrame(), {}
+    
+    braking['gap'] = braking['Distance'].diff() > 150
+    braking['cluster'] = braking['gap'].cumsum()
+    clusters = braking.groupby('cluster').agg({'X': 'mean', 'Y': 'mean', 'Distance': 'mean'}).reset_index()
+    
+    laps = session.laps.dropna(subset=['LapNumber', 'Position', 'Driver'])
+    if laps.empty: return clusters, {}
+    
+    max_lap = int(laps['LapNumber'].max())
+    ot_by_cluster = {int(c): [] for c in clusters['cluster']}
+    
+    for lap in range(2, max_lap + 1):
+        prev = laps[laps['LapNumber'] == lap - 1][['Driver', 'Position']]
+        curr = laps[laps['LapNumber'] == lap][['Driver', 'Position']]
+        merged = prev.merge(curr, on='Driver', suffixes=('_prev', '_curr'))
+        gained = merged[merged['Position_curr'] < merged['Position_prev']]
+        
+        for _, row in gained.iterrows():
+            attacker = row['Driver']
+            defender_rows = merged[merged['Position_prev'] == row['Position_curr']]
+            if defender_rows.empty: continue
+            
+            try:
+                att_lap = session.laps.pick_driver(attacker)
+                att_lap = att_lap[att_lap['LapNumber'] == lap]
+                if not att_lap.empty:
+                    att_tel = att_lap.iloc[0].get_telemetry()
+                    max_dist = att_tel.loc[att_tel['Speed'].idxmax(), 'Distance']
+                else: max_dist = ref_tel.loc[ref_tel['Speed'].idxmax(), 'Distance']
+            except:
+                max_dist = ref_tel.loc[ref_tel['Speed'].idxmax(), 'Distance']
+                
+            dist_diff = clusters['Distance'] - max_dist
+            valid_clusters = clusters[dist_diff > 0]
+            c_id = int(clusters.iloc[0]['cluster']) if valid_clusters.empty else int(valid_clusters.iloc[0]['cluster'])
+            
+            att_color = get_accurate_driver_color(attacker, results_df)
+            def_color = get_accurate_driver_color(defender_rows['Driver'].values[0], results_df)
+            ot_by_cluster[c_id].append(f"L{lap}: <span style='color:{att_color}'><b>{attacker}</b></span> pass <span style='color:{def_color}'><b>{defender_rows['Driver'].values[0]}</b></span>")
+            
+    return clusters, ot_by_cluster
+
+
+# ─────────────────────────────────────────────────────────────
 #  CORE DATA PROCESSOR (RESOURCE CACHED)
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False, ttl=3600)
 def process_circuit_data(year, race, session_id):
+    """Uses st.cache_resource to prevent UnhashableParamErrors on FastF1 objects."""
     try:
         session = fastf1.get_session(year, race, session_id)
         session.load(telemetry=True, weather=True, messages=True)
@@ -139,55 +190,6 @@ def process_circuit_data(year, race, session_id):
 
 
 # ─────────────────────────────────────────────────────────────
-#  SPATIAL OVERTAKE ENGINE
-# ─────────────────────────────────────────────────────────────
-def get_spatial_overtakes(session, ref_tel, results_df):
-    braking = ref_tel[ref_tel['Long_G'] < -1.5].copy()
-    if braking.empty: return pd.DataFrame(), {}
-    
-    braking['gap'] = braking['Distance'].diff() > 150
-    braking['cluster'] = braking['gap'].cumsum()
-    clusters = braking.groupby('cluster').agg({'X': 'mean', 'Y': 'mean', 'Distance': 'mean'}).reset_index()
-    
-    laps = session.laps.dropna(subset=['LapNumber', 'Position', 'Driver'])
-    if laps.empty: return clusters, {}
-    
-    max_lap = int(laps['LapNumber'].max())
-    ot_by_cluster = {int(c): [] for c in clusters['cluster']}
-    
-    for lap in range(2, max_lap + 1):
-        prev = laps[laps['LapNumber'] == lap - 1][['Driver', 'Position']]
-        curr = laps[laps['LapNumber'] == lap][['Driver', 'Position']]
-        merged = prev.merge(curr, on='Driver', suffixes=('_prev', '_curr'))
-        gained = merged[merged['Position_curr'] < merged['Position_prev']]
-        
-        for _, row in gained.iterrows():
-            attacker = row['Driver']
-            defender_rows = merged[merged['Position_prev'] == row['Position_curr']]
-            if defender_rows.empty: continue
-            
-            try:
-                att_lap = session.laps.pick_driver(attacker)
-                att_lap = att_lap[att_lap['LapNumber'] == lap]
-                if not att_lap.empty:
-                    att_tel = att_lap.iloc[0].get_telemetry()
-                    max_dist = att_tel.loc[att_tel['Speed'].idxmax(), 'Distance']
-                else: max_dist = ref_tel.loc[ref_tel['Speed'].idxmax(), 'Distance']
-            except:
-                max_dist = ref_tel.loc[ref_tel['Speed'].idxmax(), 'Distance']
-                
-            dist_diff = clusters['Distance'] - max_dist
-            valid_clusters = clusters[dist_diff > 0]
-            c_id = int(clusters.iloc[0]['cluster']) if valid_clusters.empty else int(valid_clusters.iloc[0]['cluster'])
-            
-            att_color = get_accurate_driver_color(attacker, results_df)
-            def_color = get_accurate_driver_color(defender_rows['Driver'].values[0], results_df)
-            ot_by_cluster[c_id].append(f"L{lap}: <span style='color:{att_color}'><b>{attacker}</b></span> pass <span style='color:{def_color}'><b>{defender_rows['Driver'].values[0]}</b></span>")
-            
-    return clusters, ot_by_cluster
-
-
-# ─────────────────────────────────────────────────────────────
 #  STATIC TRACK MAP (CLEAN LEGEND & PROPER DRS)
 # ─────────────────────────────────────────────────────────────
 def render_static_track_map(tel, ref_lap, circuit_info):
@@ -211,7 +213,6 @@ def render_static_track_map(tel, ref_lap, circuit_info):
     s3 = tel[tel['Sector'] == 3]
     
     # ── EXPLICIT LEGEND DEFINITIONS ──
-    # By creating empty dummy traces here, we strictly control the legend and prevent bloat.
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#e8002d', width=5), name='Sector 1'))
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#3fb6dc', width=5), name='Sector 2'))
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#ffd700', width=5), name='Sector 3'))
@@ -223,9 +224,7 @@ def render_static_track_map(tel, ref_lap, circuit_info):
 
     # ── DRS ZONES & DETECTION ──
     if 'DRS' in tel.columns:
-        # Check for DRS eligibility (>= 8). This guarantees we map the zone even if the wing wasn't opened.
         drs_active = tel[tel['DRS'] >= 8].copy()
-            
         if not drs_active.empty:
             fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#00d47e', width=10), name='DRS Zone'))
             drs_active['gap'] = drs_active['Distance'].diff() > 100
@@ -233,7 +232,6 @@ def render_static_track_map(tel, ref_lap, circuit_info):
                 if len(seg) > 1:
                     fig.add_trace(go.Scatter(x=seg['X'], y=seg['Y'], mode='lines', line=dict(color='#00d47e', width=10), hovertemplate="<b>DRS ZONE</b><extra></extra>", showlegend=False))
         
-        # Detection Points (Transition to DRS eligible)
         tel['DRS_shift'] = tel['DRS'].shift(1, fill_value=0)
         drs_det_points = tel[(tel['DRS'] >= 8) & (tel['DRS_shift'] < 8)]
         valid_det = []
@@ -270,24 +268,13 @@ def render_static_track_map(tel, ref_lap, circuit_info):
 #  JSON COMPILER FOR JS WIDESCREEN TABLE (CRASH-PROOF CACHE)
 # ─────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
-def compile_table_payload(year, race, session_id, available_drivers):
-    """
-    By removing FastF1 objects from the arguments entirely, we completely
-    eliminate the Streamlit UnhashableParamError.
-    """
-    # Fetch pre-cached data internally
-    session, tel, _, _, _ = process_circuit_data(year, race, session_id)
-    if session is None: return None
-    
-    results_df = getattr(session, 'results', pd.DataFrame())
-    laps = session.laps.dropna(subset=['LapNumber', 'LapTime', 'Driver'])
-    max_laps = int(laps['LapNumber'].max()) if not laps.empty else 0
-    
+def compile_table_payload(year, race, session_id, available_drivers, _session, _results_df, _laps):
+    max_laps = int(_laps['LapNumber'].max()) if not _laps.empty else 0
     stats, pb_dict = [], {}
     global_mins, global_maxs = {}, {}
     
     for drv in available_drivers:
-        drv_laps = session.laps.pick_driver(drv).dropna(subset=['LapTime'])
+        drv_laps = _session.laps.pick_driver(drv).dropna(subset=['LapTime'])
         for _, lap in drv_laps.iterlaps():
             try:
                 lap_tel = lap.get_telemetry()
@@ -342,7 +329,7 @@ def compile_table_payload(year, race, session_id, available_drivers):
     for col in ['Avg', 'Slow', 'Med', 'Fast', 'Trap']:
         global_mins[col], global_maxs[col] = df_all[col].min(), df_all[col].max()
 
-    wd = session.weather_data
+    wd = _session.weather_data
     frames = {}
     
     for lap_num in range(1, max_laps + 1):
@@ -353,7 +340,7 @@ def compile_table_payload(year, race, session_id, available_drivers):
         status_val = lap_df['TrackStatus'].iloc[0]
         track_status = parse_track_status(status_val)
         
-        lap_time_obj = laps[laps['LapNumber'] == lap_num]['Time'].min()
+        lap_time_obj = _laps[_laps['LapNumber'] == lap_num]['Time'].min()
         if pd.notna(lap_time_obj) and not wd.empty:
             idx = (wd['Time'] - lap_time_obj).abs().idxmin()
             w_row = wd.loc[idx]
@@ -366,7 +353,7 @@ def compile_table_payload(year, race, session_id, available_drivers):
         for _, row in lap_df.iterrows():
             drv = row['Driver']
             leaderboard.append({
-                "drv": drv, "color": get_accurate_driver_color(drv, results_df), "time": row['Time'],
+                "drv": drv, "color": get_accurate_driver_color(drv, _results_df), "time": row['Time'],
                 "time_c": get_f1_color(row['Time_s'], drv, 'Time_s', gb, pb, True),
                 "avg": row['Avg'], "avg_c": get_gradient_color(row['Avg'], global_mins['Avg'], global_maxs['Avg']),
                 "slow": row['Slow'], "slow_c": get_gradient_color(row['Slow'], global_mins['Slow'], global_maxs['Slow']),
@@ -516,7 +503,7 @@ def render_widescreen_table_player(json_payload):
     </body>
     </html>
     """
-    components.html(player_html, height=760, scrolling=False)
+    components.html(player_html, height=750, scrolling=False)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -555,39 +542,55 @@ def render_heatmaps(session, tel, results_df):
     if not clusters.empty:
         x_density, y_density = [], []
         x_hover, y_hover, hov_text = [], [], []
+        x_ot, y_ot = [], []
         
         for _, row in clusters.iterrows():
             c_id = int(row['cluster'])
             ot_list = ot_dict.get(c_id, [])
             if not ot_list: continue 
             
-            # High-density scatter logic: plot many semi-transparent dots to build "red intensity" volume
+            # 1. High-density scatter logic: plot many semi-transparent dots to build "red intensity" volume
             np.random.seed(c_id) # For deterministic rendering
             num_dots = len(ot_list) * 20 
             for _ in range(num_dots):
                 x_density.append(row['X'] + np.random.normal(0, 120))
                 y_density.append(row['Y'] + np.random.normal(0, 120))
+
+            # 2. Actual Overtake scatter points
+            for idx, ot_str in enumerate(ot_list):
+                angle = (idx / max(1, len(ot_list))) * 2 * math.pi
+                radius = 30 + (idx % 4) * 20
+                x_ot.append(row['X'] + radius * math.cos(angle))
+                y_ot.append(row['Y'] + radius * math.sin(angle))
                 
-            # Single invisible hover target for the entire corner
+            # 3. Single invisible hover target for the entire corner
             x_hover.append(row['X'])
             y_hover.append(row['Y'])
             hov_text.append("<br>".join(ot_list))
 
         if x_density:
-            # 1. The Red Intensity Density Plot (No hover, purely visual)
+            # The Red Intensity Density Plot (No hover, purely visual)
             fig_act.add_trace(go.Scatter(
                 x=x_density, y=y_density, mode='markers',
                 marker=dict(color='#e8002d', size=5, opacity=0.3, line=dict(width=0)),
                 hoverinfo='skip', showlegend=False
             ))
             
-            # 2. The Unified Hover Target (Invisible, large radius)
+            # The Overtake Scatter (hoverinfo='skip' -> removes hover ONLY from these dots)
+            fig_act.add_trace(go.Scatter(
+                x=x_ot, y=y_ot, mode='markers',
+                marker=dict(color='#00d47e', size=8, opacity=0.9, line=dict(color='white', width=0.5)),
+                hoverinfo='skip',
+                name="Overtake Executed", showlegend=True
+            ))
+
+            # The Unified Hover Target (Invisible, large radius covering the corner)
             fig_act.add_trace(go.Scatter(
                 x=x_hover, y=y_hover, mode='markers',
-                marker=dict(color='rgba(0,0,0,0)', size=50), # 100% transparent to the eye
+                marker=dict(color='rgba(0,0,0,0)', size=60), # 100% transparent to the eye
                 customdata=hov_text,
                 hovertemplate="<b>OVERTAKES AT THIS CORNER:</b><br>%{customdata}<extra></extra>",
-                name="Action Zone", showlegend=True
+                name="Action Zone", showlegend=False
             ))
         else:
             st.info("No on-track overtakes detected in this session.")
@@ -696,6 +699,7 @@ def render_circuit(year, race, session_id, session_name, available_drivers):
         return
         
     results_df = getattr(session, 'results', pd.DataFrame())
+    laps = session.laps.dropna(subset=['LapNumber', 'LapTime', 'Driver'])
 
     st.divider()
     section_header("SESSION DASHBOARD", "Interactive Track Walk & Lap-by-Lap Replay")
@@ -705,7 +709,7 @@ def render_circuit(year, race, session_id, session_name, available_drivers):
 
     if available_drivers:
         with st.spinner("Preloading vector telemetry & wind physics (Takes ~10s)..."):
-            json_payload = compile_table_payload(year, race, session_id, available_drivers)
+            json_payload = compile_table_payload(year, race, session_id, available_drivers, _session=session, _results_df=results_df, _laps=laps)
             
         if json_payload:
             render_widescreen_table_player(json_payload)
