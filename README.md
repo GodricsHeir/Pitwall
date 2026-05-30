@@ -1,20 +1,57 @@
-Here is the fully updated `README.md` file reflecting all the recent architectural overhauls, the new 9-tab routing structure, the robust Historical Risk Profile engine, and the complete Circuit Analysis module with the high-density overtake scatter and widescreen JS table.
-
-```markdown
 <div align="center">
 
-
 ```
-
 ██████╗ ██╗████████╗██╗    ██╗ █████╗ ██╗     ██╗
 ██╔══██╗██║╚══██╔══╝██║    ██║██╔══██╗██║     ██║
 ██████╔╝██║   ██║   ██║ █╗ ██║███████║██║     ██║
 ██╔═══╝ ██║   ██║   ██║███╗██║██╔══██║██║     ██║
 ██║     ██║   ██║   ╚███╔███╔╝██║  ██║███████╗███████╗
 ╚═╝     ╚═╝   ╚═╝    ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚══════╝
-
 ```
 
+### `ANALYTICS`
+
+**Professional F1 Strategy & Telemetry Dashboard**  
+*Powered by FastF1 · Built with Streamlit · 2018 – 2026*
+
+---
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-3671C6?style=for-the-badge&logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.57-E8002D?style=for-the-badge&logo=streamlit&logoColor=white)
+![FastF1](https://img.shields.io/badge/FastF1-3.8.3-FF8000?style=for-the-badge)
+![Plotly](https://img.shields.io/badge/Plotly-6.7-00D2BE?style=for-the-badge&logo=plotly&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-229971?style=for-the-badge)
+
+</div>
+
+---
+
+## 🏁 What Is PitWall?
+
+**PitWall Analytics** is a full-stack Formula 1 data application that replicates the kind of analysis used by real F1 strategy teams. It pulls live and historical session data directly from the official F1 timing feed via the [FastF1](https://github.com/theOehrly/Fast-F1) library and presents it in a sleek, matte dark dashboard across **9 analysis modules**.
+
+> Every session from **2018 to 2026** — Race, Qualifying, Sprint, Sprint Shootout, FP1/2/3 — is fully supported.
+
+---
+
+## ⚡ Quick Start
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/yourname/pitwall-analytics.git
+cd pitwall-analytics
+
+# 2. Create and activate a virtual environment (recommended)
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # macOS / Linux
+
+# 3. Install all dependencies
+pip install -r requirements.txt
+
+# 4. Launch the app
+streamlit run main.py
+```
 
 > **First load** will be slow — FastF1 downloads session data from the F1 timing servers and caches it locally in `f1_cache/`. Every subsequent load of the same session is **near-instant**.
 
@@ -41,7 +78,6 @@ pitwall-analytics/
 ├── 📄  requirements.txt — Full pinned dependency list
 ├── 📄  .gitignore
 └── 📂  f1_cache/        — Auto-created FastF1 local cache directory
-
 ```
 
 ---
@@ -238,7 +274,6 @@ pitwall-analytics/
     │       ├── Race/
     │       └── Qualifying/
     └── ...
-
 ```
 
 ### Streamlit Cache TTL
@@ -279,7 +314,7 @@ MIT License — do whatever you want, don't blame me if your strategy call loses
 
 ---
 
-**Built for the love of the sport.**
+**Built for the love of the sport.**  
 *Not affiliated with Formula 1, the FIA, or any constructor.*
 
 `FastF1` data is sourced from the official F1 timing feed and is subject to F1's terms of use.
