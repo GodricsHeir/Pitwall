@@ -3,18 +3,231 @@ strategy.py — Race Strategy & Stint Overview for PitWall Analytics
 """
 import streamlit as st
 import pandas as pd
+import fastf1
 import plotly.express as px
 import plotly.graph_objects as go
 
 from utils import (
     safe_load_session, apply_tyre_labels, extract_pit_map, format_time,
-    TYRE_COLORS, PLOTLY_THEME, section_header, no_data_error, driver_color
+    TYRE_COLORS, PLOTLY_THEME, section_header, no_data_error
 )
 
+# ─────────────────────────────────────────────────────────────
+#  ROBUST DRIVER COLOR ENGINE
+# ─────────────────────────────────────────────────────────────
+def get_accurate_driver_color(drv, results_df=None):
+    """Safely extracts valid hex colors directly from official timing data."""
+    try:
+        if results_df is not None and not results_df.empty:
+            c = results_df.loc[results_df['Abbreviation'] == drv, 'TeamColor'].values[0]
+            if pd.notna(c) and str(c).strip() != "": 
+                return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: pass
+    try:
+        c = fastf1.plotting.driver_color(drv)
+        return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: return "#ffffff"
+
+
+# ─────────────────────────────────────────────────────────────
+#  HISTORICAL CIRCUIT RISK PROFILE ENGINE (SESSION-SPECIFIC)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=86400 * 7)
+def _get_circuit_risk_profile(current_year, event_name, session_name):
+    """
+    Scrapes from 2018 up to the current year for THIS SPECIFIC SESSION TYPE.
+    Uses absolute TrackStatus codes (1=Clear, 2=Yellow, 4=SC, 5=Red, 6=VSC) 
+    instead of text matching for 100% precision. Logs years and specific counts.
+    """
+    stats = {
+        'All': {'total': 0, 'SC_sess': 0, 'VSC_sess': 0, 'Red_sess': 0, 'Yellow_sess': 0, 'SC_count': 0, 'VSC_count': 0, 'Red_count': 0, 'Yellow_count': 0, 'SC_years': {}, 'VSC_years': {}, 'Red_years': {}, 'Yellow_years': {}},
+        'Dry': {'total': 0, 'SC_sess': 0, 'VSC_sess': 0, 'Red_sess': 0, 'Yellow_sess': 0, 'SC_count': 0, 'VSC_count': 0, 'Red_count': 0, 'Yellow_count': 0, 'SC_years': {}, 'VSC_years': {}, 'Red_years': {}, 'Yellow_years': {}},
+        'Wet': {'total': 0, 'SC_sess': 0, 'VSC_sess': 0, 'Red_sess': 0, 'Yellow_sess': 0, 'SC_count': 0, 'VSC_count': 0, 'Red_count': 0, 'Yellow_count': 0, 'SC_years': {}, 'VSC_years': {}, 'Red_years': {}, 'Yellow_years': {}}
+    }
+    
+    try: current_year = int(current_year)
+    except: return stats
+    
+    for y in range(2018, current_year + 1):
+        try:
+            ev = fastf1.get_event(y, event_name)
+            schedule = fastf1.get_event_schedule(y)
+            
+            if ev.EventName not in schedule['EventName'].values:
+                continue
+                
+            try:
+                session = ev.get_session(session_name)
+                session.load(telemetry=False, weather=True, messages=True)
+                
+                is_wet = False
+                if not session.weather_data.empty and 'Rainfall' in session.weather_data.columns:
+                    if session.weather_data['Rainfall'].sum() > 0:
+                        is_wet = True
+                
+                w_key = 'Wet' if is_wet else 'Dry'
+                
+                # Fetch absolute end time to filter out post-race administrative flags
+                limit_time = pd.Timedelta(days=999) 
+                if session.session_status is not None and not session.session_status.empty:
+                    finished_rows = session.session_status[session.session_status['Status'].str.upper() == 'FINISHED']
+                    if not finished_rows.empty:
+                        limit_time = finished_rows['Time'].iloc[0]
+
+                ts = session.track_status
+                if ts is not None and not ts.empty:
+                    valid_ts = ts[ts['Time'] <= limit_time]
+                    codes = valid_ts['Status'].astype(str).tolist()
+                    
+                    sc_instances = codes.count('4')
+                    vsc_instances = codes.count('6')
+                    red_instances = codes.count('5')
+                    yellow_instances = codes.count('2')
+                    
+                    # Register session
+                    stats['All']['total'] += 1
+                    stats[w_key]['total'] += 1
+                    
+                    for k in ['All', w_key]:
+                        stats[k]['SC_count'] += sc_instances
+                        stats[k]['VSC_count'] += vsc_instances
+                        stats[k]['Red_count'] += red_instances
+                        stats[k]['Yellow_count'] += yellow_instances
+                        
+                        if sc_instances > 0: 
+                            stats[k]['SC_sess'] += 1
+                            stats[k]['SC_years'][y] = sc_instances
+                        if vsc_instances > 0: 
+                            stats[k]['VSC_sess'] += 1
+                            stats[k]['VSC_years'][y] = vsc_instances
+                        if red_instances > 0: 
+                            stats[k]['Red_sess'] += 1
+                            stats[k]['Red_years'][y] = red_instances
+                        if yellow_instances > 0: 
+                            stats[k]['Yellow_sess'] += 1
+                            stats[k]['Yellow_years'][y] = yellow_instances
+                        
+            except Exception:
+                continue 
+        except Exception:
+            continue 
+            
+    return stats
+
+
+def _render_risk_ui(year, race, session_name):
+    st.markdown(f'<div class="pw-section-label">Historical Circuit Risk Profile ({session_name.upper()} SESSIONS ONLY)</div>', unsafe_allow_html=True)
+    
+    with st.spinner(f"Aggregating historical {session_name} data for this circuit (From 2018 to {year})..."):
+        stats = _get_circuit_risk_profile(year, race, session_name)
+        
+    if stats['All']['total'] == 0:
+        st.info(f"No historical {session_name} data available for this circuit since 2018.")
+        return
+        
+    tab1, tab2, tab3 = st.tabs(["Combined (All Conditions)", "Dry Sessions", "Wet/Mixed Sessions"])
+    
+    def render_tab_content(data_dict):
+        t = data_dict['total']
+        if t == 0: 
+            st.markdown("<div style='color:#888; font-style:italic; padding: 20px 0;'>No sessions recorded for these conditions.</div>", unsafe_allow_html=True)
+            return
+        
+        sc_s, sc_c = data_dict['SC_sess'], data_dict['SC_count']
+        vsc_s, vsc_c = data_dict['VSC_sess'], data_dict['VSC_count']
+        red_s, red_c = data_dict['Red_sess'], data_dict['Red_count']
+        y_s, y_c = data_dict['Yellow_sess'], data_dict['Yellow_count']
+        
+        col_y = "#FFEA00"
+        col_vsc = "#FFBA08"
+        col_sc = "#FF8F00"
+        col_red = "#E8002D"
+        
+        # 1. Metric Display Cards (Probability of presence)
+        st.markdown(f"""
+        <div style="display:flex; gap:12px; margin-top: 10px; margin-bottom: 25px;">
+           <div style="flex:1; background:rgba(255,234,0,0.02); border:1px solid rgba(255,234,0,0.15); border-top: 3px solid {col_y}; border-radius:6px; padding:15px 10px; text-align:center;">
+              <div style="color:{col_y}; font-size:1.6rem; font-weight:800; font-family:'JetBrains Mono', monospace;">{(y_s/t)*100:.1f}% <span style="font-size:0.9rem; color:#666;">({y_s}/{t})</span></div>
+              <div style="color:#888; font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; margin-top:6px; font-weight:600;">Yellow Flag Chance</div>
+           </div>
+           <div style="flex:1; background:rgba(255,186,8,0.02); border:1px solid rgba(255,186,8,0.15); border-top: 3px solid {col_vsc}; border-radius:6px; padding:15px 10px; text-align:center;">
+              <div style="color:{col_vsc}; font-size:1.6rem; font-weight:800; font-family:'JetBrains Mono', monospace;">{(vsc_s/t)*100:.1f}% <span style="font-size:0.9rem; color:#666;">({vsc_s}/{t})</span></div>
+              <div style="color:#888; font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; margin-top:6px; font-weight:600;">VSC Probability</div>
+           </div>
+           <div style="flex:1; background:rgba(255,143,0,0.02); border:1px solid rgba(255,143,0,0.15); border-top: 3px solid {col_sc}; border-radius:6px; padding:15px 10px; text-align:center;">
+              <div style="color:{col_sc}; font-size:1.6rem; font-weight:800; font-family:'JetBrains Mono', monospace;">{(sc_s/t)*100:.1f}% <span style="font-size:0.9rem; color:#666;">({sc_s}/{t})</span></div>
+              <div style="color:#888; font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; margin-top:6px; font-weight:600;">Safety Car Chance</div>
+           </div>
+           <div style="flex:1; background:rgba(232,0,45,0.02); border:1px solid rgba(232,0,45,0.15); border-top: 3px solid {col_red}; border-radius:6px; padding:15px 10px; text-align:center;">
+              <div style="color:{col_red}; font-size:1.6rem; font-weight:800; font-family:'JetBrains Mono', monospace;">{(red_s/t)*100:.1f}% <span style="font-size:0.9rem; color:#666;">({red_s}/{t})</span></div>
+              <div style="color:#888; font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase; margin-top:6px; font-weight:600;">Red Flag Chance</div>
+           </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Helper to format year strings for hover tooltip
+        def format_years(years_dict):
+            if not years_dict: return "None"
+            return ", ".join([f"{yr} ({cnt})" for yr, cnt in sorted(years_dict.items(), reverse=True)])
+            
+        hover_texts = [
+            f"<b>Yellow Flags</b><br>Years: {format_years(data_dict['Yellow_years'])}",
+            f"<b>Virtual Safety Cars</b><br>Years: {format_years(data_dict['VSC_years'])}",
+            f"<b>Safety Cars</b><br>Years: {format_years(data_dict['SC_years'])}",
+            f"<b>Red Flags</b><br>Years: {format_years(data_dict['Red_years'])}"
+        ]
+        
+        # 2. Volume Infographic (Average counts per session)
+        categories = ['Yellow Flags', 'VSCs', 'Safety Cars', 'Red Flags']
+        colored_cats = [
+            f"<span style='color:{col_y}; font-weight:700;'>Yellow Flags</span>",
+            f"<span style='color:{col_vsc}; font-weight:700;'>VSCs</span>",
+            f"<span style='color:{col_sc}; font-weight:700;'>Safety Cars</span>",
+            f"<span style='color:{col_red}; font-weight:700;'>Red Flags</span>"
+        ]
+        averages = [y_c / t, vsc_c / t, sc_c / t, red_c / t]
+        colors = [col_y, col_vsc, col_sc, col_red]
+        
+        fig_avg = go.Figure(go.Bar(
+            x=averages, y=categories, orientation='h',
+            marker=dict(color=colors, line=dict(color='rgba(255,255,255,0.1)', width=1)),
+            text=[f"{val:.2f}" for val in averages], 
+            textposition='outside',
+            textfont=dict(family="JetBrains Mono", size=12, color="white"),
+            cliponaxis=False,
+            customdata=hover_texts,
+            hovertemplate="%{customdata}<extra></extra>"
+        ))
+        
+        fig_avg.update_layout(
+            **PLOTLY_THEME, height=240, title=dict(text="Average Incident Density Per Session", font=dict(size=13)),
+            margin=dict(t=40, b=10, l=110, r=40), xaxis_title="Mean Occurrences per Session"
+        )
+        
+        fig_avg.update_yaxes(
+            tickvals=categories,
+            ticktext=colored_cats
+        )
+        
+        st.plotly_chart(fig_avg, use_container_width=True)
+        st.markdown(f"<div style='color:#555568; font-size:0.75rem; text-align:right; font-family:\"JetBrains Mono\", monospace;'>BASED ON {t} HISTORICAL {session_name.upper()} SESSIONS</div>", unsafe_allow_html=True)
+        
+    with tab1: render_tab_content(stats['All'])
+    with tab2: render_tab_content(stats['Dry'])
+    with tab3: render_tab_content(stats['Wet'])
+
+
+# ─────────────────────────────────────────────────────────────
+#  MAIN RENDERER
+# ─────────────────────────────────────────────────────────────
 def render_strategy(year, race, session_id, session_name):
     section_header("STRATEGY BOARD", f"{year} {race}  ·  {session_name}")
 
-    # ── 1. LOAD ──────────────────────────────────────────
+    # ── 1. CIRCUIT RISK PROFILE ──────────────────────────
+    _render_risk_ui(year, race, session_name)
+    st.divider()
+
+    # ── 2. LOAD SESSION ──────────────────────────────────
     session, laps, err = safe_load_session(year, race, session_id)
     if err:
         no_data_error(err)
@@ -26,7 +239,7 @@ def render_strategy(year, race, session_id, session_name):
     clean = apply_tyre_labels(laps)
     pit_map = extract_pit_map(laps)
 
-    # ── 2. TYRE STRATEGY GANTT CHART ─────────────────────
+    # ── 3. TYRE STRATEGY GANTT CHART ─────────────────────
     st.markdown("#### Grid Tyre Strategy & Stint Lengths")
     
     stints = (clean.groupby(['Driver', 'Stint', 'Tyre'])
@@ -48,18 +261,27 @@ def render_strategy(year, race, session_id, session_name):
         labels={'Laps_Driven': 'Stint Length', 'Start_Lap': 'Lap Pit In', 'End_Lap': 'Lap Pit Out'}
     )
 
+    colored_ticks = [f"<span style='color:{get_accurate_driver_color(d, results)}; font-weight:800; font-family:\"JetBrains Mono\", monospace;'>{d}</span>" for d in finish_order]
+
     fig.update_layout(
-        **PLOTLY_THEME, height=700,
-        xaxis_title="Lap Number", yaxis_title="Driver", barmode='overlay' 
+        **PLOTLY_THEME, height=750,
+        xaxis_title="Lap Number", yaxis_title="", barmode='overlay',
+        margin=dict(l=100)
     )
-    fig.update_yaxes(categoryorder='array', categoryarray=finish_order)
+    
+    fig.update_yaxes(
+        categoryorder='array', 
+        categoryarray=finish_order,
+        tickvals=finish_order,
+        ticktext=colored_ticks
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 3. UNDERCUT / OVERCUT ANALYZER ───────────────────
+    # ── 4. UNDERCUT / OVERCUT ANALYZER ───────────────────
     st.divider()
     section_header("UNDERCUT / OVERCUT", "Direct Pit Sequence Analyzer")
     
-    # Call the isolated fragment
     _render_analyzer_fragment(clean, pit_map, results)
 
 
@@ -115,7 +337,6 @@ def _render_analyzer_fragment(clean, pit_map, results):
         st.info("Not enough driver data to run pit comparisons.")
         return
 
-    # ── CLEAN UI LAYOUT ──
     col1, col2 = st.columns(2)
     
     with col1:
@@ -268,7 +489,6 @@ def _render_analyzer_fragment(clean, pit_map, results):
             
         st.markdown(f"**{m['driver']} ({m['tyre_old']} ➔ {m['tyre_new']})**")
         
-        # ── INCIDENT INJECTION HERE ──
         if m['incident_tags']:
             st.warning(f"⚠️ Pitted under: **{' / '.join(m['incident_tags'])}**")
         
@@ -289,7 +509,6 @@ def _render_analyzer_fragment(clean, pit_map, results):
     with c3:
         st.markdown(f"**{d1} vs {d2} Verdict**")
         
-        # Alert if comparing SC to Green Flag
         if bool(m1['incident_tags']) != bool(m2['incident_tags']):
             st.error("🚨 **Unequal Track Conditions!** One driver pitted under an incident, drastically reducing their pit lane time loss. Direct time comparisons are skewed.")
             
@@ -304,8 +523,8 @@ def _render_analyzer_fragment(clean, pit_map, results):
     # ── TIME LOSS BREAKDOWN CHART ──
     fig_bar = go.Figure()
     
-    color1 = driver_color(d1, results)
-    color2 = driver_color(d2, results)
+    color1 = get_accurate_driver_color(d1, results)
+    color2 = get_accurate_driver_color(d2, results)
 
     fig_bar.add_trace(go.Bar(
         name=d1, x=['In-Lap Time', 'Out-Lap Time (inc. Pit)'], y=[m1['in_time'], m1['out_time']],
