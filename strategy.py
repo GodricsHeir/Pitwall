@@ -3,9 +3,11 @@ strategy.py — Race Strategy & Stint Overview for PitWall Analytics
 """
 import streamlit as st
 import pandas as pd
+import numpy as np
 import fastf1
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from utils import (
     safe_load_session, apply_tyre_labels, extract_pit_map, format_time,
@@ -232,6 +234,12 @@ def render_strategy(year, race, session_id, session_name):
     if err:
         no_data_error(err)
         return
+        
+    # Ensure weather and messages are explicitly loaded for the track overlays
+    try:
+        session.load(telemetry=False, weather=True, messages=True)
+    except Exception:
+        pass
 
     results = getattr(session, 'results', pd.DataFrame())
 
@@ -239,8 +247,8 @@ def render_strategy(year, race, session_id, session_name):
     clean = apply_tyre_labels(laps)
     pit_map = extract_pit_map(laps)
 
-    # ── 3. TYRE STRATEGY GANTT CHART ─────────────────────
-    st.markdown("#### Grid Tyre Strategy & Stint Lengths")
+    # ── 3. TYRE STRATEGY GANTT CHART (WITH OVERLAYS) ─────
+    st.markdown("#### Grid Tyre Strategy & Environmental Context")
     
     stints = (clean.groupby(['Driver', 'Stint', 'Tyre'])
               .agg(Start_Lap=('LapNumber', 'min'),
@@ -254,27 +262,139 @@ def render_strategy(year, race, session_id, session_name):
     except Exception:
         finish_order = sorted(stints['Driver'].unique())
 
-    fig = px.bar(
-        stints, y="Driver", x="Laps_Driven", base="Start_Lap",
-        color="Tyre", color_discrete_map=TYRE_COLORS, orientation='h',
-        hover_data={'Driver': True, 'Tyre': True, 'Stint': True, 'Start_Lap': True, 'End_Lap': True, 'Laps_Driven': False},
-        labels={'Laps_Driven': 'Stint Length', 'Start_Lap': 'Lap Pit In', 'End_Lap': 'Lap Pit Out'}
+    # Build Weather Context Matrix
+    def get_weather_state(row):
+        rain = row.get('Rainfall', False)
+        temp = row.get('TrackTemp', 30.0)
+        status = str(row.get('TrackStatus', '1'))
+        if rain:
+            if '4' in status or '5' in status: return 4, "Heavy Rain / SC"
+            return 3, "Wet"
+        else:
+            if temp < 25.0: return 2, "Cool / Overcast"
+            return 1, "Clear / Dry"
+
+    if not laps.empty:
+        try:
+            w_df = laps.get_weather_data()
+            for col in w_df.columns:
+                if col not in laps.columns:
+                    laps[col] = w_df[col]
+        except Exception:
+            pass
+
+    weather_res = laps.apply(get_weather_state, axis=1)
+    laps['W_Level'] = [x[0] for x in weather_res]
+    laps['W_Desc'] = [x[1] for x in weather_res]
+    
+    if 'TrackTemp' in laps.columns:
+        env_df = laps.groupby('LapNumber').agg({'TrackTemp': 'mean', 'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
+    else:
+        env_df = laps.groupby('LapNumber').agg({'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
+
+    # Construct High-Density Subplot
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.04, row_heights=[0.8, 0.2],
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
+    # A) Base Gantt Bars
+    for tyre_type in stints['Tyre'].unique():
+        df_t = stints[stints['Tyre'] == tyre_type]
+        custom_data = np.stack((df_t['Stint'], df_t['Start_Lap'], df_t['End_Lap']), axis=-1)
+        
+        fig.add_trace(go.Bar(
+            x=df_t['Laps_Driven'], y=df_t['Driver'], base=df_t['Start_Lap'],
+            orientation='h', name=tyre_type,
+            marker=dict(color=TYRE_COLORS.get(tyre_type, '#8888a0'), line=dict(width=1, color='rgba(0,0,0,0.5)')),
+            customdata=custom_data,
+            hovertemplate="<b>%{y}</b><br>Tyre: " + tyre_type + "<br>Stint: %{customdata[0]}<br>Lap Pit In: %{customdata[1]}<br>Lap Pit Out: %{customdata[2]}<br>Stint Length: %{x} laps<extra></extra>",
+            legendgroup="tyres"
+        ), row=1, col=1, secondary_y=False)
+
+    # B) Track Temp Overlay
+    if 'TrackTemp' in laps.columns:
+        fig.add_trace(go.Scatter(
+            x=env_df['LapNumber'], y=env_df['TrackTemp'], mode='lines',
+            line=dict(color='rgba(255, 107, 53, 0.5)', width=2, dash='dot'),
+            name='Track Temp', hoverinfo='skip'
+        ), row=1, col=1, secondary_y=True)
+
+    # C) Weather Subplot
+    weather_color_map = {1: 'rgba(255, 215, 0, 0.7)', 2: 'rgba(150, 150, 150, 0.7)', 3: 'rgba(77, 184, 255, 0.8)', 4: 'rgba(0, 85, 255, 0.9)'}
+    w_colors = env_df['W_Level'].map(weather_color_map).tolist()
+    
+    fig.add_trace(go.Bar(
+        x=env_df['LapNumber'], y=env_df['W_Level'],
+        marker_color=w_colors, marker_line_width=0, width=1,
+        customdata=env_df['W_Desc'], hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
+        showlegend=False
+    ), row=2, col=1)
+
+    unique_w_levels = env_df['W_Level'].unique()
+    if 1 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.7)", size=12, symbol="square"), name="Clear / Dry", legendgroup="weather"), row=1, col=1)
+    if 2 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(150, 150, 150, 0.7)", size=12, symbol="square"), name="Cool / Overcast", legendgroup="weather"), row=1, col=1)
+    if 3 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(77, 184, 255, 0.8)", size=12, symbol="square"), name="Wet / Damp", legendgroup="weather"), row=1, col=1)
+    if 4 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(0, 85, 255, 0.9)", size=12, symbol="square"), name="Heavy Rain", legendgroup="weather"), row=1, col=1)
+
+    # D) Track Status Incident Overlay (SC / VSC / Red Flag)
+    has_sc, has_vsc, has_red = False, False, False
+    for lap_num in laps['LapNumber'].dropna().unique():
+        stat = "".join(laps[laps['LapNumber'] == lap_num]['TrackStatus'].dropna().astype(str).tolist())
+        if '4' in stat: 
+            has_sc = True
+            fig.add_vrect(x0=lap_num-0.5, x1=lap_num+0.5, fillcolor="rgba(255, 215, 0, 0.12)", layer="below", line_width=0, row=1, col=1)
+        elif '6' in stat: 
+            has_vsc = True
+            fig.add_vrect(x0=lap_num-0.5, x1=lap_num+0.5, fillcolor="rgba(255, 165, 0, 0.15)", layer="below", line_width=0, row=1, col=1)
+        elif '5' in stat: 
+            has_red = True
+            fig.add_vrect(x0=lap_num-0.5, x1=lap_num+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
+            
+    if has_sc: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.4)", size=12, symbol="square"), name="Safety Car", legendgroup="status"), row=1, col=1)
+    if has_vsc: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 165, 0, 0.4)", size=12, symbol="square"), name="Virtual SC", legendgroup="status"), row=1, col=1)
+    if has_red: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.4)", size=12, symbol="square"), name="Red Flag", legendgroup="status"), row=1, col=1)
+
+    # E) Race Control Messages (Penalties)
+    if hasattr(session, 'race_control_messages'):
+        rcm = session.race_control_messages
+        if rcm is not None and not rcm.empty:
+            ref_laps = session.laps.pick_driver(results.iloc[0]['Abbreviation'])
+            ref_laps = ref_laps.sort_values('LapStartDate').dropna(subset=['LapStartDate', 'LapNumber'])
+            for _, msg in rcm.iterrows():
+                text = str(msg['Message']).upper()
+                if "PENALTY" in text or "BLACK AND WHITE" in text:
+                    idx = ref_laps['LapStartDate'].searchsorted(msg['Time'])
+                    if 0 < idx < len(ref_laps):
+                        lap_num = ref_laps.iloc[idx]['LapNumber']
+                        color = "#e8002d" if "PENALTY" in text else "#ffffff"
+                        fig.add_vline(x=lap_num, line=dict(color=color, width=1.5, dash='dashdot'),
+                                      annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
+                                      annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
+
+    # Layout Rendering
     colored_ticks = [f"<span style='color:{get_accurate_driver_color(d, results)}; font-weight:800; font-family:\"JetBrains Mono\", monospace;'>{d}</span>" for d in finish_order]
 
     fig.update_layout(
-        **PLOTLY_THEME, height=750,
-        xaxis_title="Lap Number", yaxis_title="", barmode='overlay',
-        margin=dict(l=100)
+        **PLOTLY_THEME, height=850, bargap=0.3, barmode='overlay',
+        margin=dict(t=50, l=100),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5,
+            bgcolor="rgba(19, 19, 26, 0.9)", bordercolor="rgba(255,255,255,0.1)", borderwidth=1, font=dict(size=12)
+        )
     )
     
     fig.update_yaxes(
         categoryorder='array', 
         categoryarray=finish_order,
         tickvals=finish_order,
-        ticktext=colored_ticks
+        ticktext=colored_ticks,
+        row=1, col=1, secondary_y=False
     )
+    fig.update_yaxes(title_text="Track Temp (°C)", showgrid=False, row=1, col=1, secondary_y=True)
+    fig.update_yaxes(tickvals=[1, 2, 3, 4], ticktext=["Clear", "Overcast", "Wet", "Red/Heavy"], row=2, col=1)
+    fig.update_xaxes(title_text="Lap Number", row=2, col=1)
     
     st.plotly_chart(fig, use_container_width=True)
 

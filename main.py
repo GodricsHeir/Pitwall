@@ -1,6 +1,7 @@
 import streamlit as st
 import fastf1
 import os
+from datetime import datetime
 
 st.set_page_config(
     page_title="PitWall Analytics",
@@ -73,7 +74,7 @@ html, body, [class*="css"] { font-family: 'Exo 2', sans-serif !important; }
     text-transform: uppercase;
 }
 
-/* ── NATIVE STREAMLIT TABS STYLING (Replaces Custom HTML Tabs) ── */
+/* ── NATIVE STREAMLIT TABS STYLING ── */
 div[data-testid="stTabs"] > div > div > div > button[role="tab"] {
     padding: 10px 22px !important; background: transparent !important;
     border: none !important; border-bottom: 3px solid transparent !important;
@@ -88,7 +89,6 @@ div[data-testid="stTabs"] > div > div > div > button[role="tab"]:hover {
 div[data-testid="stTabs"] > div > div > div > button[role="tab"][aria-selected="true"] {
     color: var(--accent) !important; border-bottom-color: var(--accent) !important; background: transparent !important;
 }
-/* Hide the default gray bottom border of the tab list */
 div[data-testid="stTabs"] > div > div { gap: 8px !important; border-bottom: 1px solid var(--border) !important; padding-bottom: 0 !important; }
 
 /* ── Config Row ── */
@@ -103,8 +103,7 @@ div[data-testid="stTabs"] > div > div { gap: 8px !important; border-bottom: 1px 
 
 /* ── Selector overrides ── */
 div[data-testid="stSelectbox"] > label,
-div[data-testid="stMultiSelect"] > label,
-div[data-testid="stCheckbox"] > label { color: var(--text-dim) !important; font-size: 0.75rem !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; font-weight: 600 !important; }
+div[data-testid="stMultiSelect"] > label { color: var(--text-dim) !important; font-size: 0.75rem !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; font-weight: 600 !important; }
 
 div[data-baseweb="select"] > div:first-child,
 div[data-baseweb="input"] > div { background-color: #0f0f18 !important; border-color: var(--border) !important; border-radius: 4px !important; }
@@ -175,21 +174,27 @@ h3 { color: var(--accent2) !important; font-size: 1rem !important; }
     margin-bottom: 1rem;
 }
 
-/* ── Driver card grid ── */
-.pw-driver-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 1rem; }
-.pw-driver-card {
-    border: 1px solid var(--border); border-radius: 4px;
-    background: var(--card); padding: 10px 12px;
-    cursor: pointer; transition: all .15s; text-align: center;
-    font-weight: 600; font-size: 0.85rem; letter-spacing: 0.05em;
-    color: var(--text-dim);
+/* ── Global Checkbox styling (Sleek High-Contrast Tiles) ── */
+div[data-testid="stCheckbox"] {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 2px solid rgba(255, 255, 255, 0.1) !important;
+    padding: 10px 14px !important;
+    border-radius: 6px !important;
+    transition: all 0.2s ease-in-out !important;
 }
-.pw-driver-card:hover { border-color: var(--accent); color: var(--text); }
-.pw-driver-card.selected { border-color: var(--accent); background: rgba(232,0,45,0.12); color: var(--text); }
-
-/* ── Checkbox styling ── */
-div[data-testid="stCheckbox"] { background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; transition: border-color .15s; }
-div[data-testid="stCheckbox"]:hover { border-color: var(--muted); }
+div[data-testid="stCheckbox"] label p {
+    color: #ffffff !important;
+    font-size: 1.0rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.05em !important;
+}
+div[data-testid="stCheckbox"]:hover {
+    border-color: #e8002d !important;
+    background-color: rgba(232, 0, 45, 0.15) !important;
+}
+div[data-testid="stCheckbox"] label span {
+    border-color: #ffffff !important;
+}
 
 /* ── Info / warning / error boxes ── */
 div[data-testid="stAlert"] { border-radius: 4px !important; border-left-width: 3px !important; }
@@ -224,7 +229,7 @@ st.markdown("""
 <div class="pw-banner">
   <div class="pw-logo">
     <div class="pw-logo-title">PIT<span>WALL</span></div>
-    <div class="pw-logo-sub">F1 Strategy & Telemetry Analytics · 1950 – 2026</div>
+    <div class="pw-logo-sub">F1 Strategy & Telemetry Analytics · 1950 – Present</div>
   </div>
   <div class="pw-badge">LIVE DATA</div>
 </div>
@@ -257,7 +262,8 @@ st.markdown('<div class="pw-config">', unsafe_allow_html=True)
 
 col1, col2, col3, col_gap = st.columns([1, 2, 1.5, 0.1])
 with col1:
-    year = st.selectbox("Season", list(range(1950, 2027))[::-1])
+    current_year = datetime.now().year
+    year = st.selectbox("Season", list(range(1950, current_year + 1))[::-1])
 with col2:
     schedule = get_schedule(year)
     race = st.selectbox("Grand Prix", schedule if schedule else ["— no data —"])
@@ -321,7 +327,7 @@ with tabs[0]:
         race_tab.render_race_results(year, race, session_id, session_name)
 
 # ── CHAMPIONSHIP STANDINGS ──────────────────
-with tabs[1]: # <-- Make sure this changes to 8 since we inserted Circuit at 7
+with tabs[1]: 
     st.markdown('<div class="pw-section-label">Championship Tracker</div>', unsafe_allow_html=True)
     import champion
     champion.render_championship(year, race, session_id, session_name)
@@ -353,7 +359,7 @@ with tabs[3]:
             st.warning("No driver data available.")
         else:
             winner_id = None
-            if session_id in ['R', 'S']:
+            if session_id in ['R', 'S', 'SQ']:
                 try:
                     sw = fastf1.get_session(year, race, session_id)
                     sw.load(telemetry=False, weather=False, messages=False, laps=False)
@@ -361,32 +367,40 @@ with tabs[3]:
                 except Exception:
                     pass
 
-            include_winner = False
-            if winner_id:
-                include_winner = st.checkbox(f"🏆 Auto-include winner ({winner_id})", value=False, key="h2h_win")
+            # Encapsulated in Form to prevent auto-reloads on every checkbox click
+            with st.form("h2h_form"):
+                st.markdown('<div style="font-size: 1.0rem; color: #ffffff; font-weight: 700; margin-bottom: 12px;">Select Drivers to Compare (Max 6)</div>', unsafe_allow_html=True)
+                
+                selected_drivers = []
+                cols = st.columns(6)
+                for idx, drv in enumerate(available_drivers):
+                    with cols[idx % 6]:
+                        # Pre-select top 2 to have a default starting state
+                        if st.checkbox(drv, value=(idx < 2), key=f"h2h_chk_{drv}"):
+                            selected_drivers.append(drv)
+                
+                include_winner = False
+                if winner_id:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    include_winner = st.checkbox(f"🏆 Auto-include session winner ({winner_id})", value=False, key="h2h_win")
+                
+                st.divider()
+                submitted = st.form_submit_button("▶  GENERATE COMPARISON", type="primary", use_container_width=True)
 
-            st.markdown("**Select drivers to compare (2–6)**")
-            valid_drivers = available_drivers
-            selected_drivers = []
-            cols = st.columns(5)
-            for idx, drv in enumerate(valid_drivers):
-                with cols[idx % 5]:
-                    if st.checkbox(drv, key=f"h2h_{drv}"):
-                        selected_drivers.append(drv)
+            final_drivers = list(selected_drivers)
+            if include_winner and winner_id and winner_id not in final_drivers:
+                final_drivers.append(winner_id)
 
-            st.divider()
-            if st.button("▶  Generate Comparison", type="primary", use_container_width=True, key="h2h_btn"):
-                final_drivers = list(selected_drivers)
-                if include_winner and winner_id and winner_id not in final_drivers:
-                    final_drivers.append(winner_id)
-                if len(final_drivers) < 2:
-                    st.error("Select at least 2 drivers.")
-                elif len(final_drivers) > 6:
-                    st.error("Maximum 6 drivers.")
-                else:
-                    with st.spinner("Loading comparison…"):
-                        import compare
-                        compare.render_comparison(year, race, session_id, session_name, final_drivers)
+            if len(final_drivers) < 2:
+                st.info("Please select at least 2 drivers to generate the head-to-head comparison.")
+            else:
+                if len(final_drivers) > 6:
+                    st.warning("Maximum of 6 drivers can be compared at once. Displaying the first 6 selections.")
+                    final_drivers = final_drivers[:6]
+                    
+                with st.spinner("Loading comparison…"):
+                    import compare
+                    compare.render_comparison(year, race, session_id, session_name, final_drivers)
 
 # ── TEAMMATE DUEL ───────────────────────────
 with tabs[4]:
@@ -417,14 +431,9 @@ with tabs[6]:
         if not available_drivers:
             st.warning("No driver data available.")
         else:
-            pc1, _ = st.columns([2, 2])
-            with pc1:
-                eng_driver = st.selectbox("Select Driver", available_drivers, key="eng_drv")
-            
-            st.divider()
             with st.spinner("Loading race engineer data…"):
                 import engineer
-                engineer.render_engineer(year, race, session_id, session_name, eng_driver)
+                engineer.render_engineer(year, race, session_id, session_name, available_drivers)
 
 # ── RACE REPLAY ─────────────────────────────
 with tabs[7]:
@@ -445,4 +454,3 @@ with tabs[8]:
         with st.spinner("Mapping circuit topography and corner data…"):
             import circuit
             circuit.render_circuit(year, race, session_id, session_name, available_drivers)
-
