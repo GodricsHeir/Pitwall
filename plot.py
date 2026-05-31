@@ -4,6 +4,7 @@ plot.py — Advanced Pace Trace module for PitWall Analytics
 import streamlit as st
 import pandas as pd
 import numpy as np
+import fastf1
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -11,8 +12,21 @@ from plotly.subplots import make_subplots
 from utils import (
     format_time, apply_tyre_labels, extract_pit_map,
     filter_clean_laps, safe_load_session, TYRE_COLORS,
-    PLOTLY_THEME, section_header, no_data_error, driver_color, delta_str
+    PLOTLY_THEME, section_header, no_data_error, delta_str
 )
+
+def get_accurate_driver_color(drv, results_df=None):
+    """Safely extracts valid hex colors directly from official timing data."""
+    try:
+        if results_df is not None and not results_df.empty:
+            c = results_df.loc[results_df['Abbreviation'] == drv, 'TeamColor'].values[0]
+            if pd.notna(c) and str(c).strip() != "": 
+                return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: pass
+    try:
+        c = fastf1.plotting.driver_color(drv)
+        return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: return "#ffffff"
 
 def render_plot(year, race, session_id, session_name, selected_driver, available_drivers, show_annotations=True):
     section_header("PACE TRACE", f"{year} {race}  ·  {session_name}")
@@ -169,7 +183,7 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
     else:
         for drv in plot_laps['Driver'].unique():
             df_d = plot_laps[plot_laps['Driver'] == drv]
-            color = driver_color(drv, results_df)
+            color = get_accurate_driver_color(drv, results_df)
             fig.add_trace(go.Scatter(
                 x=df_d['LapNumber'], y=df_d['LapTime_s'], mode='lines+markers',
                 marker=dict(size=4), line=dict(color=color, width=1.5),
@@ -248,10 +262,12 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
                                           annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
                                           annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
                                           
-        if selected_driver != "ALL":
-            for _, row in pit_map[pit_map['Driver'] == selected_driver].iterrows():
-                fig.add_vline(x=row['Pit Lap'], line=dict(color='rgba(255,107,53,0.6)', width=1.5, dash='dot'),
-                              annotation_text="PIT", annotation_font=dict(size=9, color='#ff6b35'), row=1, col=1)
+        # Draw Pit Stops with distinct driver colors and no text
+        for _, row in pit_map.iterrows():
+            if selected_driver != "ALL" and row['Driver'] != selected_driver:
+                continue
+            color = get_accurate_driver_color(row['Driver'], results_df)
+            fig.add_vline(x=row['Pit Lap'], line=dict(color=color, width=2.5, dash='dot'), row=1, col=1)
 
     title = f"Race Pace Trace & Environmental Data · {selected_driver if selected_driver != 'ALL' else session_name}"
     
@@ -328,7 +344,7 @@ def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annot
     else:
         for drv in plot_laps['Driver'].unique():
             df_d = plot_laps[plot_laps['Driver'] == drv]
-            color = driver_color(drv, results_df)
+            color = get_accurate_driver_color(drv, results_df)
             fig.add_trace(go.Scatter(
                 x=df_d['LapNumber'], y=df_d['LapTime_s'], mode='markers',
                 marker=dict(size=9, line=dict(width=1, color='rgba(255,255,255,0.2)'), color=color),

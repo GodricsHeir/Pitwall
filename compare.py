@@ -355,9 +355,10 @@ def _race_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_m
                                       annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
                                       annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
                                       
+    # Draw Pit Stops with distinct driver colors and no text
     for _, row in pit_map[pit_map['Driver'].isin(drivers)].iterrows():
-        fig.add_vline(x=row['Pit Lap'], line=dict(color='rgba(255,107,53,0.6)', width=1.5, dash='dot'),
-                      annotation_text=f"PIT {row['Driver']}", annotation_font=dict(size=8, color='#ff6b35'), row=1, col=1)
+        p_color = drv_colors.get(row['Driver'], '#ffffff')
+        fig.add_vline(x=row['Pit Lap'], line=dict(color=p_color, width=2.5, dash='dot'), row=1, col=1)
 
     fig.update_layout(
         title="Head-to-Head Race Pace", hovermode="x unified", height=700, bargap=0, margin=dict(t=100),
