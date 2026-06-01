@@ -654,9 +654,72 @@ def render_engineering_desk(tel, circuit_info):
     fig_3d.update_layout(**PLOTLY_THEME, height=650, margin=dict(t=0, b=0, l=0, r=0), legend=dict(title="Topography Legend", orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), scene=dict(aspectmode='data', xaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), yaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), zaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), camera=dict(eye=dict(x=1.2, y=1.2, z=0.8))))
     st.plotly_chart(fig_3d, use_container_width=True)
 
+    # ── NEW: DRIVER INPUT TELEMETRY MAP ──
+    st.markdown('<br><div class="pw-section-label">Driver Input Telemetry Map</div>', unsafe_allow_html=True)
+    st.caption("Spatial analysis of throttle and brake application across the circuit layout.")
+    
+    plot_tel = tel.copy()
+    plot_tel['Throttle'] = pd.to_numeric(plot_tel.get('Throttle', 0), errors='coerce').fillna(0)
+    plot_tel['Brake'] = pd.to_numeric(plot_tel.get('Brake', 0), errors='coerce').fillna(0)
+    
+    plot_tel['Input_State'] = 'Coasting'
+    plot_tel.loc[(plot_tel['Throttle'] > 0) & (plot_tel['Throttle'] < 95), 'Input_State'] = 'Partial Throttle'
+    plot_tel.loc[plot_tel['Throttle'] >= 95, 'Input_State'] = 'Full Throttle'
+    plot_tel.loc[plot_tel['Brake'] > 0, 'Input_State'] = 'Braking'
+    
+    fig_in = go.Figure()
+    
+    input_mapping = [
+        ('Full Throttle', '#00d47e', 'Full Throttle (>95%)'),
+        ('Partial Throttle', '#ffd700', 'Partial Throttle (1-94%)'),
+        ('Coasting', '#4db8ff', 'Coasting (Off Pedals)'),
+        ('Braking', '#e8002d', 'Braking')
+    ]
+    
+    for state, color, label in input_mapping:
+        df_state = plot_tel[plot_tel['Input_State'] == state]
+        if not df_state.empty:
+            fig_in.add_trace(go.Scatter(
+                x=df_state['X'], y=df_state['Y'], mode='markers',
+                marker=dict(color=color, size=6),
+                customdata=np.stack((df_state['Speed'], df_state['Throttle'], df_state['Brake']), axis=-1),
+                hovertemplate=f"<b>{label}</b><br>Speed: %{{customdata[0]:.0f}} km/h<br>Throttle: %{{customdata[1]:.0f}}%<br>Brake: %{{customdata[2]}}<extra></extra>",
+                name=label
+            ))
+            
+    fig_in.update_layout(
+        **PLOTLY_THEME, height=550, margin=dict(t=30, b=10, l=10, r=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(0,0,0,0)", font=dict(size=13, color='white'))
+    )
+    fig_in.update_xaxes(showgrid=False, zeroline=False, showticklabels=False)
+    fig_in.update_yaxes(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1)
+    st.plotly_chart(fig_in, use_container_width=True)
+
+    # ── CALCULATE & RENDER PERCENTAGES ──
+    total_pts = len(plot_tel)
+    if total_pts > 0:
+        pct_ft = len(plot_tel[plot_tel['Input_State'] == 'Full Throttle']) / total_pts * 100
+        pct_pt = len(plot_tel[plot_tel['Input_State'] == 'Partial Throttle']) / total_pts * 100
+        pct_br = len(plot_tel[plot_tel['Input_State'] == 'Braking']) / total_pts * 100
+        pct_co = len(plot_tel[plot_tel['Input_State'] == 'Coasting']) / total_pts * 100
+    else:
+        pct_ft = pct_pt = pct_br = pct_co = 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f"<div style='text-align:center; padding: 10px; background: rgba(0, 212, 126, 0.08); border-top: 3px solid #00d47e; border-radius: 4px;'><div style='color:#00d47e; font-weight:700; font-size:0.75rem; letter-spacing: 0.05em;'>FULL THROTTLE</div><div style='font-size: 1.4rem; font-family: JetBrains Mono; margin-top: 5px;'>{pct_ft:.1f}%</div></div>", unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"<div style='text-align:center; padding: 10px; background: rgba(255, 215, 0, 0.08); border-top: 3px solid #ffd700; border-radius: 4px;'><div style='color:#ffd700; font-weight:700; font-size:0.75rem; letter-spacing: 0.05em;'>PARTIAL THROTTLE</div><div style='font-size: 1.4rem; font-family: JetBrains Mono; margin-top: 5px;'>{pct_pt:.1f}%</div></div>", unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"<div style='text-align:center; padding: 10px; background: rgba(232, 0, 45, 0.08); border-top: 3px solid #e8002d; border-radius: 4px;'><div style='color:#e8002d; font-weight:700; font-size:0.75rem; letter-spacing: 0.05em;'>BRAKING</div><div style='font-size: 1.4rem; font-family: JetBrains Mono; margin-top: 5px;'>{pct_br:.1f}%</div></div>", unsafe_allow_html=True)
+    with c4:
+        st.markdown(f"<div style='text-align:center; padding: 10px; background: rgba(77, 184, 255, 0.08); border-top: 3px solid #4db8ff; border-radius: 4px;'><div style='color:#4db8ff; font-weight:700; font-size:0.75rem; letter-spacing: 0.05em;'>COASTING</div><div style='font-size: 1.4rem; font-family: JetBrains Mono; margin-top: 5px;'>{pct_co:.1f}%</div></div>", unsafe_allow_html=True)
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
     col_gear, col_sev = st.columns(2)
     with col_gear:
-        st.markdown('<br><div class="pw-section-label">Gearshift Modality</div>', unsafe_allow_html=True)
+        st.markdown('<div class="pw-section-label">Gearshift Modality</div>', unsafe_allow_html=True)
         st.caption("Color maps to Gear. Identifies short-shifting zones.")
         fig_gear = go.Figure()
         fig_gear.add_trace(go.Scatter(x=tel['X'], y=tel['Y'], mode='markers', marker=dict(color=tel['nGear'], colorscale='Turbo', size=4, showscale=True, colorbar=dict(title="Gear", thickness=10, len=0.8, x=1.0)), customdata=np.stack((tel['nGear'], tel['Wind_Type'], tel['Wind_Arrow']), axis=-1), hovertemplate="<b>Gear:</b> %{customdata[0]}<br><b>Wind:</b> %{customdata[1]} %{customdata[2]}<extra></extra>", name="Gear"))
@@ -666,7 +729,7 @@ def render_engineering_desk(tel, circuit_info):
         st.plotly_chart(fig_gear, use_container_width=True)
 
     with col_sev:
-        st.markdown('<br><div class="pw-section-label">Severity Index (Braking Zones)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="pw-section-label">Severity Index (Braking Zones)</div>', unsafe_allow_html=True)
         st.caption("Deep red highlights the heaviest longitudinal braking forces.")
         fig_sev = go.Figure()
         fig_sev.add_trace(go.Scatter(x=tel['X'], y=tel['Y'], mode='markers', marker=dict(color=tel['Long_G'].abs(), colorscale='Reds', size=4, showscale=True, colorbar=dict(title="Braking Gs", thickness=10, len=0.8, x=1.0)), customdata=np.stack((tel['Long_G'].abs(), tel['Wind_Type'], tel['Wind_Arrow']), axis=-1), hovertemplate="<b>Braking G-Force:</b> %{customdata[0]:.2f} G<br><b>Wind:</b> %{customdata[1]} %{customdata[2]}<extra></extra>", name="Braking"))
