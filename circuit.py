@@ -17,18 +17,52 @@ from utils import (
 )
 
 # ─────────────────────────────────────────────────────────────
-#  COLLOQUIAL CORNER DICTIONARY
+#  EXTENSIVE COLLOQUIAL CORNER DICTIONARY
 # ─────────────────────────────────────────────────────────────
+TRACK_ALIASES = {
+    "Silverstone": ["silverstone", "british"],
+    "Spa-Francorchamps": ["spa", "francorchamps", "belgian"],
+    "Monza": ["monza", "italian"],
+    "Suzuka": ["suzuka", "japanese"],
+    "Interlagos": ["são paulo", "sao paulo", "brazilian", "interlagos"],
+    "Albert Park": ["melbourne", "albert park", "australian"],
+    "Monaco": ["monaco"],
+    "Baku": ["baku", "azerbaijan"],
+    "Gilles-Villeneuve": ["montreal", "montréal", "canadian"],
+    "Zandvoort": ["zandvoort", "dutch"],
+    "Imola": ["imola", "emilia romagna", "san marino"],
+    "Catalunya": ["barcelona", "catalunya", "montmeló", "montmelo", "spanish"],
+    "Red Bull Ring": ["spielberg", "red bull ring", "austrian"],
+    "Hungaroring": ["budapest", "hungaroring", "hungarian"],
+    "Austin": ["austin", "cota", "united states", "us grand prix"],
+    "Hermanos Rodriguez": ["mexico city", "mexico", "mexican"],
+    "Bahrain": ["sakhir", "bahrain"],
+    "Marina Bay": ["marina bay", "singapore"],
+    "Yas Marina": ["yas island", "yas marina", "abu dhabi"],
+    "Miami": ["miami"]
+}
+
 FAMOUS_CORNERS = {
-    "Silverstone": {9: "Copse", 10: "Maggotts", 11: "Becketts", 12: "Chapel", 15: "Stowe", 16: "Vale", 18: "Club"},
-    "Spa-Francorchamps": {1: "La Source", 3: "Eau Rouge", 4: "Raidillon", 7: "Les Combes", 10: "Pouhon", 18: "Blanchimont", 19: "Bus Stop"},
-    "Monza": {1: "Rettifilo", 4: "Della Roggia", 6: "Lesmo 1", 7: "Lesmo 2", 8: "Ascari", 11: "Parabolica"},
-    "Suzuka": {1: "First Curve", 3: "S Curves", 8: "Degner 1", 9: "Degner 2", 11: "Hairpin", 13: "Spoon", 15: "130R", 16: "Casio Triangle"},
-    "Interlagos": {1: "Senna S", 4: "Descida do Lago", 8: "Macunaima", 10: "Bico de Pato", 12: "Junção"},
-    "Albert Park": {1: "Brabham", 2: "Jones", 3: "Sports Centre", 14: "Ascari"},
-    "Monaco": {1: "Sainte Devote", 3: "Massenet", 4: "Casino", 5: "Mirabeau", 6: "Hairpin", 8: "Portier", 9: "Tunnel", 10: "Nouvelle Chicane", 12: "Tabac", 15: "Swimming Pool", 17: "La Rascasse"},
+    "Silverstone": {1: "Abbey", 2: "Farm", 3: "Village", 4: "The Loop", 5: "Aintree", 6: "Brooklands", 7: "Luffield", 8: "Woodcote", 9: "Copse", 10: "Maggotts", 11: "Becketts", 12: "Chapel", 15: "Stowe", 16: "Vale", 18: "Club"},
+    "Spa-Francorchamps": {1: "La Source", 2: "Eau Rouge", 3: "Eau Rouge", 4: "Raidillon", 5: "Les Combes", 6: "Les Combes", 7: "Malmedy", 8: "Bruxelles", 9: "Speaker's Corner", 10: "Pouhon", 11: "Pouhon", 12: "Fagnes", 13: "Fagnes", 14: "Campus", 15: "Stavelot", 16: "Courbe Paul Frere", 17: "Blanchimont", 18: "Blanchimont", 19: "Bus Stop", 20: "Bus Stop"},
+    "Monza": {1: "Variante del Rettifilo", 2: "Variante del Rettifilo", 3: "Curva Grande (Biassono)", 4: "Variante della Roggia", 5: "Variante della Roggia", 6: "Curva di Lesmo 1", 7: "Curva di Lesmo 2", 8: "Curva del Vialone", 9: "Variante Ascari", 10: "Variante Ascari", 11: "Curva Alboreto (Parabolica)"},
+    "Suzuka": {1: "First Corner", 2: "Second Corner", 3: "S Curves", 4: "S Curves", 5: "S Curves", 6: "S Curves", 7: "Dunlop Curve", 8: "Degner 1", 9: "Degner 2", 11: "Hairpin", 13: "Spoon Curve", 14: "Spoon Curve", 15: "130R", 16: "Casio Triangle"},
+    "Interlagos": {1: "S do Senna", 2: "S do Senna", 3: "Curva do Sol", 4: "Descida do Lago", 5: "Descida do Lago", 6: "Ferradura", 7: "Ferradura", 8: "Macunaima", 9: "Pinheirinho", 10: "Bico de Pato", 11: "Mergulho", 12: "Junção", 13: "Subida dos Boxes"},
+    "Albert Park": {1: "Brabham", 2: "Jones", 3: "Sports Centre", 4: "Clark", 5: "Whiteford", 6: "Albert Road", 9: "Bob Jane", 10: "Bob Jane", 11: "Waite", 12: "Waite", 13: "Hill", 14: "Ascari", 15: "Stewart", 16: "Prost"},
+    "Monaco": {1: "Sainte Devote", 2: "Beau Rivage", 3: "Massenet", 4: "Casino", 5: "Mirabeau Haute", 6: "Fairmont Hairpin", 7: "Mirabeau Bas", 8: "Portier", 9: "Tunnel", 10: "Nouvelle Chicane", 11: "Nouvelle Chicane", 12: "Tabac", 13: "Louis Chiron", 14: "Swimming Pool", 15: "Swimming Pool", 16: "Swimming Pool", 17: "La Rascasse", 18: "Anthony Noghes"},
     "Baku": {8: "The Castle", 15: "Downhill Fast", 16: "Blind Turn"},
-    "Gilles-Villeneuve": {1: "Senna 'S'", 10: "L'Epingle", 13: "Wall of Champions"}
+    "Gilles-Villeneuve": {1: "Senna 'S'", 2: "Senna 'S'", 3: "Pont de la Concorde", 4: "Pont de la Concorde", 6: "Droit du Casino", 8: "Pont des Iles", 10: "L'Epingle", 13: "Wall of Champions Chicane", 14: "Wall of Champions Chicane"},
+    "Zandvoort": {1: "Tarzanbocht", 2: "Gerlachbocht", 3: "Hugenholtzbocht", 4: "Hunserug", 5: "Rob Slotemakerbocht", 7: "Scheivlak", 8: "Mastersbocht", 9: "Renaultbocht", 10: "CM.com bocht", 11: "Hans Ernst", 12: "Hans Ernst", 13: "Kumhobocht", 14: "Arie Luyendykbocht"},
+    "Imola": {2: "Variante Tamburello", 3: "Variante Tamburello", 4: "Variante Tamburello", 5: "Variante Villeneuve", 6: "Variante Villeneuve", 7: "Tosa", 9: "Piratella", 11: "Acque Minerali", 12: "Acque Minerali", 14: "Variante Alta", 15: "Variante Alta", 17: "Rivazza 1", 18: "Rivazza 2"},
+    "Catalunya": {1: "Elf", 2: "Elf", 3: "Renault", 4: "Repsol", 5: "Seat", 7: "TV3", 9: "Campsa", 10: "La Caixa", 12: "Banc Sabadell", 13: "Europcar"},
+    "Red Bull Ring": {1: "Niki Lauda Kurve", 3: "Rauch", 4: "Schlossgold", 6: "Wurth", 7: "Rindt", 9: "Red Bull Mobile", 10: "Jochen Rindt"},
+    "Hungaroring": {1: "Castrol", 4: "Mansell", 11: "Alesi"},
+    "Austin": {1: "Big Red", 2: "Esses", 3: "Esses", 4: "Esses", 5: "Esses", 11: "Hairpin", 12: "Stadium", 13: "Stadium", 14: "Stadium", 15: "Stadium", 19: "Carousel", 20: "Carousel"},
+    "Hermanos Rodriguez": {1: "Moises Solana", 2: "Moises Solana", 3: "Moises Solana", 4: "Estadio", 5: "Estadio", 12: "Nigel Mansell", 13: "Foro Sol", 14: "Foro Sol"},
+    "Bahrain": {1: "Michael Schumacher", 8: "Hairpin", 10: "Blind Left", 14: "Bapco"},
+    "Marina Bay": {1: "Sheares", 7: "Memorial", 10: "Singapore Sling", 14: "Connaught"},
+    "Yas Marina": {7: "Hairpin", 14: "Hotel Section"},
+    "Miami": {11: "Turn 11 (Stadium)", 17: "Turn 17 (Hairpin)"}
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -192,9 +226,21 @@ def process_circuit_data(year, race, session_id):
 # ─────────────────────────────────────────────────────────────
 #  STATIC TRACK MAP (CLEAN LEGEND & PROPER DRS)
 # ─────────────────────────────────────────────────────────────
-def render_static_track_map(tel, ref_lap, circuit_info):
+def render_static_track_map(tel, ref_lap, circuit_info, session):
     fig = go.Figure()
     
+    # ── IDENTIFY TRACK FOR COLLOQUIAL NAMES ──
+    track_key = None
+    loc = str(session.event.get('Location', '')).lower()
+    ev_name = str(session.event.get('EventName', '')).lower()
+    
+    for tk, aliases in TRACK_ALIASES.items():
+        if any(a in loc or a in ev_name for a in aliases):
+            track_key = tk
+            break
+            
+    corners_dict = FAMOUS_CORNERS.get(track_key, {})
+
     s1_t = ref_lap.get('Sector1SessionTime')
     s2_t = ref_lap.get('Sector2SessionTime')
     
@@ -256,7 +302,20 @@ def render_static_track_map(tel, ref_lap, circuit_info):
     if circuit_info is not None and not circuit_info.corners.empty:
         fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=16, color='#13131a', line=dict(width=1.5, color='white')), name='Corner'))
         for _, corner in circuit_info.corners.iterrows():
-            fig.add_trace(go.Scatter(x=[corner['X']], y=[corner['Y']], mode='markers+text', marker=dict(size=18, color='#13131a', line=dict(width=1.5, color='white')), text=[f"<b>{int(corner['Number'])}</b>"], textposition='middle center', textfont=dict(size=10, color='white', family="JetBrains Mono"), hovertemplate=f"<b>Turn {int(corner['Number'])}</b><extra></extra>", showlegend=False))
+            num = int(corner['Number'])
+            c_name = corners_dict.get(num, "")
+            
+            hover_text = f"<b>Turn {num}</b>"
+            if c_name:
+                hover_text += f"<br><span style='color:#ff6b35;'><i>{c_name}</i></span>"
+                
+            fig.add_trace(go.Scatter(
+                x=[corner['X']], y=[corner['Y']], mode='markers+text', 
+                marker=dict(size=18, color='#13131a', line=dict(width=1.5, color='white')), 
+                text=[f"<b>{num}</b>"], textposition='middle center', 
+                textfont=dict(size=10, color='white', family="JetBrains Mono"), 
+                hovertemplate=f"{hover_text}<extra></extra>", showlegend=False
+            ))
 
     fig.update_layout(**PLOTLY_THEME, height=550, margin=dict(t=30, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(0,0,0,0)"))
     fig.update_xaxes(showgrid=False, zeroline=False, showticklabels=False)
@@ -603,17 +662,33 @@ def render_heatmaps(session, tel, results_df):
 # ─────────────────────────────────────────────────────────────
 #  UI RENDERING: ENGINEERING DESK
 # ─────────────────────────────────────────────────────────────
-def get_corner_overlay_3d(circuit_info, x_data, y_data, z_data):
+def get_corner_overlay_3d(circuit_info, x_data, y_data, z_data, session):
     if circuit_info is not None and not circuit_info.corners.empty:
+        # Match track to fetch aliases
+        track_key = None
+        loc = str(session.event.get('Location', '')).lower()
+        ev_name = str(session.event.get('EventName', '')).lower()
+        for tk, aliases in TRACK_ALIASES.items():
+            if any(a in loc or a in ev_name for a in aliases):
+                track_key = tk
+                break
+        corners_dict = FAMOUS_CORNERS.get(track_key, {})
+        
         corners = circuit_info.corners
-        corner_z = []
+        corner_z, hover_texts = [], []
         z_arr = z_data.values if isinstance(z_data, pd.Series) else z_data
         x_arr = x_data.values if isinstance(x_data, pd.Series) else x_data
         y_arr = y_data.values if isinstance(y_data, pd.Series) else y_data
-        for cx, cy in zip(corners['X'], corners['Y']):
+        
+        for cx, cy, cnum in zip(corners['X'], corners['Y'], corners['Number']):
             dist = np.sqrt((x_arr - cx)**2 + (y_arr - cy)**2)
             idx = dist.argmin()
             corner_z.append(z_arr[idx] + 250) 
+            
+            c_name = corners_dict.get(int(cnum), "")
+            h_txt = f"<b>Turn {int(cnum)}</b>" + (f"<br>{c_name}" if c_name else "")
+            hover_texts.append(h_txt)
+            
         return go.Scatter3d(
             x=corners['X'], y=corners['Y'], z=corner_z,
             mode='markers+text',
@@ -621,11 +696,12 @@ def get_corner_overlay_3d(circuit_info, x_data, y_data, z_data):
             text=[f"<b>{n}</b>" for n in corners['Number']],
             textposition='middle center',
             textfont=dict(size=10, color='black', family="JetBrains Mono"),
-            hoverinfo='skip', showlegend=False
+            customdata=hover_texts, hovertemplate="%{customdata}<extra></extra>",
+            showlegend=False
         )
     return None
 
-def render_engineering_desk(tel, circuit_info):
+def render_engineering_desk(tel, circuit_info, session):
     st.divider()
     section_header("ENGINEERING DESK", "Track Geometry, Setup & Physics")
     
@@ -644,7 +720,7 @@ def render_engineering_desk(tel, circuit_info):
     fig_3d.add_trace(go.Surface(x=X_surf, y=Y_surf, z=Z_surf, colorscale=[[0, 'rgba(42, 42, 56, 0.8)'], [1, 'rgba(100, 100, 120, 0.9)']], showscale=False, hoverinfo='skip', name="Elevation Base"))
     fig_3d.add_trace(go.Scatter3d(x=x, y=y, z=z_exag, mode='lines', line=dict(color=tel['Speed'], colorscale='Plasma', width=8), customdata=np.stack((tel['Speed'], tel['nGear'], z), axis=-1), hovertemplate="<b>Elevation:</b> %{customdata[2]:.1f}m<br><b>Speed:</b> %{customdata[0]} km/h<br><b>Gear:</b> %{customdata[1]}<extra></extra>", name="Track Surface"))
 
-    corner_trace_3d = get_corner_overlay_3d(circuit_info, x, y, z_exag)
+    corner_trace_3d = get_corner_overlay_3d(circuit_info, x, y, z_exag, session)
     if corner_trace_3d: fig_3d.add_trace(corner_trace_3d)
     
     fig_3d.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode='lines', line=dict(color='#646478', width=10), name="Solid Elevation Wall"))
@@ -654,7 +730,7 @@ def render_engineering_desk(tel, circuit_info):
     fig_3d.update_layout(**PLOTLY_THEME, height=650, margin=dict(t=0, b=0, l=0, r=0), legend=dict(title="Topography Legend", orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), scene=dict(aspectmode='data', xaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), yaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), zaxis=dict(showbackground=False, showticklabels=False, title="", showgrid=False, zeroline=False), camera=dict(eye=dict(x=1.2, y=1.2, z=0.8))))
     st.plotly_chart(fig_3d, use_container_width=True)
 
-    # ── NEW: DRIVER INPUT TELEMETRY MAP ──
+    # ── DRIVER INPUT TELEMETRY MAP ──
     st.markdown('<br><div class="pw-section-label">Driver Input Telemetry Map</div>', unsafe_allow_html=True)
     st.caption("Spatial analysis of throttle and brake application across the circuit layout.")
     
@@ -695,7 +771,7 @@ def render_engineering_desk(tel, circuit_info):
     fig_in.update_yaxes(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1)
     st.plotly_chart(fig_in, use_container_width=True)
 
-    # ── CALCULATE & RENDER PERCENTAGES ──
+    # ── PERCENTAGE CARDS ──
     total_pts = len(plot_tel)
     if total_pts > 0:
         pct_ft = len(plot_tel[plot_tel['Input_State'] == 'Full Throttle']) / total_pts * 100
@@ -768,7 +844,7 @@ def render_circuit(year, race, session_id, session_name, available_drivers):
     section_header("SESSION DASHBOARD", "Interactive Track Walk & Lap-by-Lap Replay")
 
     # Native Streamlit Map Plot
-    render_static_track_map(tel, ref_lap, circuit_info)
+    render_static_track_map(tel, ref_lap, circuit_info, session)
 
     if available_drivers:
         with st.spinner("Preloading vector telemetry & wind physics (Takes ~10s)..."):
@@ -778,4 +854,4 @@ def render_circuit(year, race, session_id, session_name, available_drivers):
             render_widescreen_table_player(json_payload)
             
     render_heatmaps(session, tel, results_df)
-    render_engineering_desk(tel, circuit_info)
+    render_engineering_desk(tel, circuit_info, session)
