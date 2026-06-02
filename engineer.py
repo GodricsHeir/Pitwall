@@ -28,6 +28,22 @@ def get_accurate_driver_color(drv, results_df=None):
         return f"#{c}" if not str(c).startswith('#') else str(c)
     except: return "#ffffff"
 
+def _get_distinct_colors(drivers, results_df):
+    """Ensures teammates have distinct colors to avoid messy dashed lines."""
+    used = set()
+    colors = {}
+    fallbacks = ['#ffffff', '#df4bff', '#00d47e', '#ff6b35', '#ffd700', '#4db8ff']
+    for d in drivers:
+        c = str(get_accurate_driver_color(d, results_df)).lower()
+        if c in used or c == '#888888':
+            for fb in fallbacks:
+                if fb not in used:
+                    c = fb
+                    break
+        used.add(c)
+        colors[d] = c
+    return colors
+
 def _to_rgba(hex_color, alpha=0.15):
     """Converts a hex color string to an rgba string for Plotly fills."""
     try:
@@ -259,8 +275,8 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
 
     return fig
 
-def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_tel):
-    """Generates the multi-driver overlaid 7-panel telemetry chart."""
+def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_tel, drv_colors):
+    """Generates the multi-driver overlaid 7-panel telemetry chart with distinct colors."""
     fig = make_subplots(
         rows=7, cols=1, shared_xaxes=True, vertical_spacing=0.025,
         row_heights=[0.18, 0.12, 0.12, 0.12, 0.12, 0.17, 0.17]
@@ -270,7 +286,7 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
         try:
             tel = lap_obj.get_telemetry()
             tel = enrich_telemetry(tel)
-            color = get_accurate_driver_color(drv, results_df)
+            color = drv_colors[drv]
             lap_num = int(lap_obj['LapNumber'])
             trace_name = f"<b>{drv}</b> (L{lap_num})"
             
@@ -365,6 +381,135 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
 
     return fig
 
+# ─────────────────────────────────────────────────────────────
+#  MINISECTOR TRACK MAP COMPARISON
+# ─────────────────────────────────────────────────────────────
+def _render_trackmap_comparison(session, target_laps_dict, drv_colors):
+    """Generates the spatial mini-sector dominance map specifically for the selected laps."""
+    lap_data = {}
+    ref_driver = None
+    max_distance = 0
+    
+    for drv, lap_obj in target_laps_dict.items():
+        try:
+            if pd.isna(lap_obj['LapTime']): continue
+            tel = lap_obj.get_telemetry()
+            if tel.empty or 'Distance' not in tel or 'X' not in tel: continue
+            
+            lap_data[drv] = tel
+            if ref_driver is None or lap_obj['LapTime'] < target_laps_dict[ref_driver]['LapTime']:
+                ref_driver = drv
+                max_distance = tel['Distance'].max()
+        except Exception:
+            continue
+
+    if not lap_data or ref_driver is None:
+        st.info("Track layout telemetry is not available for the selected laps.")
+        return
+
+    num_sectors = 25
+    sector_edges = np.linspace(0, max_distance, num_sectors + 1)
+    ref_tel = lap_data[ref_driver]
+    
+    dominance_counts = {drv: 0 for drv in target_laps_dict.keys()}
+    sector_winners = []
+    
+    for s in range(num_sectors):
+        start_dist = sector_edges[s]
+        end_dist = sector_edges[s+1]
+        best_speed = -1
+        winner = None
+        
+        for drv, tel in lap_data.items():
+            sector_pts = tel[(tel['Distance'] >= start_dist) & (tel['Distance'] < end_dist)]
+            if not sector_pts.empty:
+                avg_speed = sector_pts['Speed'].mean()
+                if avg_speed > best_speed:
+                    best_speed = avg_speed
+                    winner = drv
+        
+        if winner:
+            dominance_counts[winner] += 1
+            sector_winners.append((winner, start_dist, end_dist, best_speed, s+1))
+        else:
+            sector_winners.append((ref_driver, start_dist, end_dist, 0, s+1))
+
+    fig = go.Figure()
+    
+    # 1. Background Track Outline (Faint)
+    fig.add_trace(go.Scatter(
+        x=ref_tel['X'], y=ref_tel['Y'], mode='lines',
+        line=dict(color='rgba(255, 255, 255, 0.15)', width=8),
+        hoverinfo='skip', showlegend=False
+    ))
+
+    # 2. Add Dummy Traces for Clean Legend
+    for drv in target_laps_dict.keys():
+        perc = (dominance_counts.get(drv, 0) / num_sectors) * 100
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode='lines',
+            line=dict(color=drv_colors[drv], width=5),
+            name=f"<b>{drv}</b> ({perc:.0f}%)"
+        ))
+
+    # 3. Draw Solid Colored Minisectors Over Background
+    for winner, start, end, speed, s_idx in sector_winners:
+        geo_pts = ref_tel[(ref_tel['Distance'] >= start) & (ref_tel['Distance'] <= end)]
+        if geo_pts.empty: continue
+            
+        color = drv_colors[winner]
+        fig.add_trace(go.Scatter(
+            x=geo_pts['X'], y=geo_pts['Y'], mode='lines',
+            line=dict(color=color, width=5),
+            hoverinfo='text',
+            text=f"<b>Mini-Sector {s_idx}</b><br>Dominating: {winner}<br>Avg Speed: {speed:.1f} km/h",
+            showlegend=False
+        ))
+
+    # 4. Start/Finish Marker
+    start_pt = ref_tel.iloc[0]
+    fig.add_trace(go.Scatter(
+        x=[start_pt['X']], y=[start_pt['Y']], mode='markers',
+        marker=dict(symbol='diamond', size=14, color='#ffffff', line=dict(width=2, color='#13131a')),
+        name='Start/Finish', hoverinfo='skip'
+    ))
+
+    # 5. Outlined Bubble Corner Numbers Overlay
+    try:
+        circuit_info = session.get_circuit_info()
+        if circuit_info is not None and not circuit_info.corners.empty:
+            corners = circuit_info.corners
+            fig.add_trace(go.Scatter(
+                x=corners['X'], y=corners['Y'], mode='markers+text',
+                # This creates a dark bubble with a white outline behind the text
+                marker=dict(size=18, color='#13131a', line=dict(width=1.5, color='rgba(255,255,255,0.7)')),
+                # The text sits perfectly centered inside the bubble
+                text=[f"<b>{n}</b>" for n in corners['Number']], textposition='middle center',
+                textfont=dict(size=10, color='rgba(255,255,255,1)', family="JetBrains Mono"),
+                name='Corners', hoverinfo='skip', showlegend=False
+            ))
+    except Exception:
+        pass
+
+    fig.update_layout(
+        **PLOTLY_THEME, height=750, title="<b>Spatial Analysis: Selected Laps Mini-Sector Dominance</b>", hovermode="closest",
+        margin=dict(t=100, b=20, l=20, r=20),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
+            bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14)
+        )
+    )
+    
+    fig.update_layout(
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────
+#  MAIN RENDERER
+# ─────────────────────────────────────────────────────────────
 def render_engineer(year, race, session_id, session_name, available_drivers):
     section_header("DRIVER TELEMETRY", f"{year} {race}  ·  {session_name}")
 
@@ -514,10 +659,12 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
                 st.error("No valid laps found for synchronization.")
                 return
         
+        drv_colors = _get_distinct_colors(selected_drivers, session.results)
+        
         for i, drv in enumerate(selected_drivers):
             with cols[i]:
                 drv_laps = laps[laps['Driver'] == drv].copy()
-                st.markdown(f"##### <span style='color:{get_accurate_driver_color(drv, session.results)}; font-weight:900;'>{drv}</span>", unsafe_allow_html=True)
+                st.markdown(f"##### <span style='color:{drv_colors[drv]}; font-weight:900;'>{drv}</span>", unsafe_allow_html=True)
                 
                 if drv_laps.empty:
                     st.error("No data")
@@ -555,8 +702,13 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
                 except Exception:
                     ref_tel = pd.DataFrame()
                 
-                fig = _plot_multi_telemetry(session, target_laps, session.results, ref_lap_obj, ref_tel)
+                fig = _plot_multi_telemetry(session, target_laps, session.results, ref_lap_obj, ref_tel, drv_colors)
                 st.plotly_chart(fig, use_container_width=True)
+                
+            st.divider()
+            section_header("TRACK MAP", "Mini-Sector Dominance Circuit Layout")
+            with st.spinner("Generating spatial mini-sector tracking..."):
+                _render_trackmap_comparison(session, target_laps, drv_colors)
                 
         st.divider()
         section_header("LAP HISTORY", "Session Logs")
