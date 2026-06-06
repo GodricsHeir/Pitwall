@@ -11,8 +11,24 @@ import fastf1
 import streamlit.components.v1 as components
 
 from utils import (
-    safe_load_session, section_header, no_data_error, driver_color
+    safe_load_session, section_header, no_data_error
 )
+
+# ─────────────────────────────────────────────────────────────
+#  ROBUST DRIVER COLOR ENGINE
+# ─────────────────────────────────────────────────────────────
+def get_accurate_driver_color(drv, results_df=None):
+    """Safely extracts valid hex colors directly from official timing data."""
+    try:
+        if results_df is not None and not results_df.empty:
+            c = results_df.loc[results_df['Abbreviation'] == drv, 'TeamColor'].values[0]
+            if pd.notna(c) and str(c).strip() != "": 
+                return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: pass
+    try:
+        c = fastf1.plotting.driver_color(drv)
+        return f"#{c}" if not str(c).startswith('#') else str(c)
+    except: return "#ffffff"
 
 # ─────────────────────────────────────────────────────────────
 #  Utility: JSON-Safe Floats & Split Formatting
@@ -434,7 +450,7 @@ def _tower_html(tower_df: pd.DataFrame, results: pd.DataFrame, is_quali=False) -
     rows_html = []
     for pos, row in tower_df.iterrows():
         drv, interval = str(row.get("Driver", "")), str(row.get("Interval", ""))
-        dcolor = driver_color(drv, results)
+        dcolor = get_accurate_driver_color(drv, results)
         
         # ── DRS / OT Logic ──
         badge_label = "OT" if row.get("Season2026", False) else "DRS"
@@ -796,7 +812,7 @@ def render_static_classification(year, race, session_id):
     # ── Streamlit DataFrame Styling ──
     def style_classification(styler):
         def driver_bg(val):
-            color = driver_color(val, results)
+            color = get_accurate_driver_color(val, results)
             return f'background-color: {color}20; color: {color}; font-weight: bold; border-left: 4px solid {color};'
         
         def delta_color(val):
