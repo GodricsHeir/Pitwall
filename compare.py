@@ -32,6 +32,23 @@ def get_accurate_driver_color(drv, results_df=None):
         return f"#{c}" if not str(c).startswith('#') else str(c)
     except: return "#ffffff"
 
+def _get_distinct_colors(drivers, results_df):
+    """Ensures teammates have distinct colors to avoid messy dashed lines."""
+    used = set()
+    colors = {}
+    # Stark neon palette for clashes
+    fallbacks = ['#00e5ff', '#df4bff', '#00d47e', '#ff6b35', '#ffd700', '#ffffff', '#ff00ff']
+    for d in drivers:
+        c = str(get_accurate_driver_color(d, results_df)).lower()
+        if c in used or c == '#888888' or c == '#ffffff':
+            for fb in fallbacks:
+                if fb not in used:
+                    c = fb
+                    break
+        used.add(c)
+        colors[d] = c
+    return colors
+
 def _to_rgba(hex_color, alpha=0.15):
     """Converts a hex color string to an rgba string for Plotly fills."""
     try:
@@ -41,12 +58,11 @@ def _to_rgba(hex_color, alpha=0.15):
             if len(c) == 6:
                 r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
                 return f"rgba({r}, {g}, {b}, {alpha})"
-    except Exception:
-        pass
+    except: pass
     return f"rgba(255, 255, 255, {alpha})"
 
 def enrich_telemetry(telemetry_df):
-    """Adds RPM handling and calculates Longitudinal & Lateral G-Force safely."""
+    """Adds RPM handling, LapTime tracking for Deltas, and calculates G-Forces."""
     if telemetry_df is None or telemetry_df.empty:
         return telemetry_df
         
@@ -57,6 +73,8 @@ def enrich_telemetry(telemetry_df):
         
         if 'Time' in telemetry_df.columns:
             telemetry_df['Time_s'] = telemetry_df['Time'].dt.total_seconds()
+            # Crucial: Calculate absolute lap time elapsed at every timestamp for the Delta math
+            telemetry_df['LapTime_s'] = telemetry_df['Time_s'] - telemetry_df['Time_s'].iloc[0]
             telemetry_df = telemetry_df.drop_duplicates(subset=['Time_s']).copy()
             
             if len(telemetry_df) > 2:
@@ -74,20 +92,13 @@ def enrich_telemetry(telemetry_df):
                     curvature = (dx_s * ddy - dy_s * ddx) / ((dx_s**2 + dy_s**2)**1.5 + 1e-6)
                     lat_g = ((telemetry_df['Speed_ms']**2) * curvature) / 9.81
                     telemetry_df['Lat_G'] = lat_g.clip(-5.5, 5.5).rolling(5, center=True).mean().fillna(0)
-                else:
-                    telemetry_df['Lat_G'] = 0
-            else:
-                telemetry_df['Long_G'] = 0
-                telemetry_df['Lat_G'] = 0
-        else:
-            telemetry_df['Long_G'] = 0
-            telemetry_df['Lat_G'] = 0
-            
-    except Exception:
-        telemetry_df['Long_G'] = 0
-        telemetry_df['Lat_G'] = 0
+                else: telemetry_df['Lat_G'] = 0
+            else: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
+        else: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
+    except: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
         
     return telemetry_df
+
 
 def _apply_strong_axes(fig):
     """Utility to make chart gridlines highly visible."""
@@ -95,21 +106,6 @@ def _apply_strong_axes(fig):
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)", zerolinewidth=1.5)
     return fig
 
-def _get_distinct_colors(drivers, results_df):
-    """Ensures teammates have distinct colors to avoid messy dashed lines."""
-    used = set()
-    colors = {}
-    fallbacks = ['#ffffff', '#df4bff', '#00d47e', '#ff6b35', '#ffd700', '#4db8ff']
-    for d in drivers:
-        c = str(get_accurate_driver_color(d, results_df)).lower()
-        if c in used or c == '#888888':
-            for fb in fallbacks:
-                if fb not in used:
-                    c = fb
-                    break
-        used.add(c)
-        colors[d] = c
-    return colors
 
 def render_comparison(year, race, session_id, session_name, selected_drivers):
     title_str = "  ·  ".join(selected_drivers)
@@ -640,41 +636,46 @@ def _render_stint_table(comp, pit_map, fastest_overall):
 # ─────────────────────────────────────────────────────────────
 def _render_telemetry_comparison(session, drivers, drv_colors):
     fig = make_subplots(
-        rows=7, cols=1, 
+        rows=8, cols=1, 
         shared_xaxes=True, 
-        vertical_spacing=0.025,
-        row_heights=[0.18, 0.12, 0.12, 0.12, 0.12, 0.17, 0.17]
+        vertical_spacing=0.02,
+        row_heights=[0.16, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
     )
     
-    valid_traces = 0
-    ref_s1, ref_s2, max_dist = None, None, None
-    
+    telemetry_data = {}
     for drv in drivers:
         try:
-            f1_lap = session.laps.pick_driver(drv).pick_fastest()
-            if pd.isna(f1_lap['LapTime']): continue
-            tel = f1_lap.get_telemetry()
-            tel = enrich_telemetry(tel)
-            
-            # Extract Sector Boundaries from the first valid driver to paint backgrounds
-            if ref_s1 is None:
-                try:
-                    time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Time'
-                    s1_time = f1_lap.get('Sector1SessionTime')
-                    s2_time = f1_lap.get('Sector2SessionTime')
-                    ref_s1 = tel.loc[tel[time_col] <= s1_time, 'Distance'].max() if pd.notna(s1_time) else None
-                    ref_s2 = tel.loc[tel[time_col] <= s2_time, 'Distance'].max() if pd.notna(s2_time) else None
-                    max_dist = tel['Distance'].max()
-                except Exception:
-                    pass
-        except Exception:
-            continue
-            
-        valid_traces += 1
+            lap = session.laps.pick_driver(drv).pick_fastest()
+            if pd.isna(lap.get('LapTime')): continue
+            tel = enrich_telemetry(lap.get_telemetry())
+            telemetry_data[drv] = (tel, lap)
+        except Exception: pass
+        
+    if not telemetry_data:
+        st.info("Telemetry data is not available for the selected drivers.")
+        return
+
+    ref_drv = list(telemetry_data.keys())[0]
+    ref_tel, ref_lap = telemetry_data[ref_drv]
+    ref_dist = ref_tel['Distance'] if not ref_tel.empty else pd.Series()
+    ref_time = ref_tel['LapTime_s'] if not ref_tel.empty and 'LapTime_s' in ref_tel else pd.Series()
+
+    for drv, (tel, lap) in telemetry_data.items():
         color = drv_colors[drv]
-        lap_num = int(f1_lap['LapNumber'])
+        lap_num = int(lap['LapNumber'])
         trace_name = f"<b>{drv}</b> (L{lap_num})"
         x_data = tel.get('Distance', tel.index)
+        
+        # ── CALCULATE TIME DELTA OVERLAY ──
+        if not ref_dist.empty and not ref_time.empty and 'LapTime_s' in tel and 'Distance' in tel:
+            comp_unique = tel.drop_duplicates(subset=['Distance']).sort_values('Distance')
+            delta_val = np.interp(ref_dist, comp_unique['Distance'], comp_unique['LapTime_s'], left=np.nan, right=np.nan) - ref_time
+            
+            fig.add_trace(go.Scatter(
+                x=ref_dist, y=delta_val, name=f"{drv} Delta", line=dict(color=color, width=2.5), 
+                legendgroup=drv, showlegend=False, hovertemplate="<b>Delta:</b> %{y:+.3f}s<extra></extra>",
+                fill='tozeroy', fillcolor=_to_rgba(color, 0.15)
+            ), row=2, col=1)
         
         def add_multi_trace(row_num, col_name, is_step=False):
             y_data = tel.get(col_name, pd.Series(np.nan, index=tel.index))
@@ -700,52 +701,53 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
                     ), row=row_num, col=1)
         
         add_multi_trace(1, 'Speed')
-        add_multi_trace(2, 'Throttle')
-        add_multi_trace(3, 'Brake')
-        add_multi_trace(4, 'nGear', is_step=True)
-        add_multi_trace(5, 'RPM')
-        add_multi_trace(6, 'Long_G')
-        add_multi_trace(7, 'Lat_G')
-
-    if valid_traces == 0:
-        st.info("Telemetry data is not available for the selected drivers.")
-        return
-        
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=6, col=1)
+        add_multi_trace(3, 'Throttle')
+        add_multi_trace(4, 'Brake')
+        add_multi_trace(5, 'nGear', is_step=True)
+        add_multi_trace(6, 'RPM')
+        add_multi_trace(7, 'Long_G')
+        add_multi_trace(8, 'Lat_G')
+            
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=2, col=1)
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=7, col=1)
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=8, col=1)
     
-    # ── OVERLAY: SECTOR SHADING & LEGEND ICONS ──
-    if ref_s1 and ref_s2 and max_dist:
-        # Background Regions (No Text)
-        fig.add_vrect(x0=0, x1=ref_s1, fillcolor="rgba(232, 0, 45, 0.08)", layer="below", line_width=0)
-        fig.add_vrect(x0=ref_s1, x1=ref_s2, fillcolor="rgba(63, 182, 220, 0.08)", layer="below", line_width=0)
-        fig.add_vrect(x0=ref_s2, x1=max_dist, fillcolor="rgba(255, 215, 0, 0.06)", layer="below", line_width=0)
-        
-        # Legend Entries for Sectors
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.5)", size=12, symbol="square"), name="Sector 1", showlegend=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(63, 182, 220, 0.5)", size=12, symbol="square"), name="Sector 2", showlegend=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.5)", size=12, symbol="square"), name="Sector 3", showlegend=True), row=1, col=1)
+    # ── SECTOR SHADING & CORNER ANNOTATIONS ──
+    try:
+        if not ref_tel.empty:
+            time_col = 'SessionTime' if 'SessionTime' in ref_tel.columns else 'Time'
+            s1_time = ref_lap.get('Sector1SessionTime')
+            s2_time = ref_lap.get('Sector2SessionTime')
+            ref_s1 = ref_tel.loc[ref_tel[time_col] <= s1_time, 'Distance'].max() if pd.notna(s1_time) else None
+            ref_s2 = ref_tel.loc[ref_tel[time_col] <= s2_time, 'Distance'].max() if pd.notna(s2_time) else None
+            max_dist = ref_tel['Distance'].max()
+            
+            if ref_s1 and ref_s2 and max_dist:
+                fig.add_vrect(x0=0, x1=ref_s1, fillcolor="rgba(232, 0, 45, 0.08)", layer="below", line_width=0)
+                fig.add_vrect(x0=ref_s1, x1=ref_s2, fillcolor="rgba(63, 182, 220, 0.08)", layer="below", line_width=0)
+                fig.add_vrect(x0=ref_s2, x1=max_dist, fillcolor="rgba(255, 215, 0, 0.06)", layer="below", line_width=0)
+                
+                fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.5)", size=12, symbol="square"), name="Sector 1", showlegend=True), row=1, col=1)
+                fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(63, 182, 220, 0.5)", size=12, symbol="square"), name="Sector 2", showlegend=True), row=1, col=1)
+                fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.5)", size=12, symbol="square"), name="Sector 3", showlegend=True), row=1, col=1)
+    except Exception: pass
 
-    # ── OVERLAY: CORNER NUMBERS & SEPARATORS ──
     try:
         circuit_info = session.get_circuit_info()
         if circuit_info is not None and not circuit_info.corners.empty:
             for _, corner in circuit_info.corners.iterrows():
                 dist = corner['Distance']
                 num = str(corner['Number'])
-                # Bolder, brighter dotted line
                 fig.add_vline(x=dist, line_width=2, line_dash="dot", line_color="rgba(255, 255, 255, 0.45)")
-                # Bright, bold corner numbers
                 fig.add_annotation(
                     x=dist, y=1.0, yref="paper", text=f"<b>{num}</b>",
                     showarrow=False, xanchor="left", yanchor="bottom",
                     font=dict(size=14, color="rgba(255,255,255,1)")
                 )
-    except Exception:
-        pass 
+    except Exception: pass 
         
     fig.update_layout(
-        **PLOTLY_THEME, height=1300, title="<b>Head-to-Head: Fastest Lap Telemetry</b>", hovermode="x unified",
+        **PLOTLY_THEME, height=1450, title=f"<b>Head-to-Head: Fastest Lap Telemetry (Aligned to {ref_drv})</b>", hovermode="x unified",
         margin=dict(t=110),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5,
@@ -754,16 +756,15 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
     )
     
     fig = _apply_strong_axes(fig)
-    
-    # Bold Axes labels
     fig.update_yaxes(title_text="<b>Speed (km/h)</b>", row=1, col=1)
-    fig.update_yaxes(title_text="<b>Throttle %</b>", row=2, col=1, range=[-5, 105])
-    fig.update_yaxes(title_text="<b>Brake</b>", row=3, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
-    fig.update_yaxes(title_text="<b>Gear</b>", row=4, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
-    fig.update_yaxes(title_text="<b>RPM</b>", row=5, col=1)
-    fig.update_yaxes(title_text="<b>Long. G</b>", row=6, col=1, range=[-6, 3])
-    fig.update_yaxes(title_text="<b>Lat. G</b>", row=7, col=1, range=[-5.5, 5.5])
-    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=7, col=1)
+    fig.update_yaxes(title_text="<b>Delta (s)</b>", row=2, col=1)
+    fig.update_yaxes(title_text="<b>Throttle %</b>", row=3, col=1, range=[-5, 105])
+    fig.update_yaxes(title_text="<b>Brake</b>", row=4, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
+    fig.update_yaxes(title_text="<b>Gear</b>", row=5, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
+    fig.update_yaxes(title_text="<b>RPM</b>", row=6, col=1)
+    fig.update_yaxes(title_text="<b>Long. G</b>", row=7, col=1, range=[-6, 3])
+    fig.update_yaxes(title_text="<b>Lat. G</b>", row=8, col=1, range=[-5.5, 5.5])
+    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=8, col=1)
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -868,9 +869,7 @@ def _render_trackmap_comparison(session, drivers, drv_colors):
             corners = circuit_info.corners
             fig.add_trace(go.Scatter(
                 x=corners['X'], y=corners['Y'], mode='markers+text',
-                # This creates a dark bubble with a white outline behind the text
                 marker=dict(size=18, color='#13131a', line=dict(width=1.5, color='rgba(255,255,255,0.7)')),
-                # The text sits perfectly centered inside the bubble
                 text=[f"<b>{n}</b>" for n in corners['Number']], textposition='middle center',
                 textfont=dict(size=10, color='rgba(255,255,255,1)', family="JetBrains Mono"),
                 name='Corners', hoverinfo='skip', showlegend=False
