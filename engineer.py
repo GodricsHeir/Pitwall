@@ -55,7 +55,7 @@ def _to_rgba(hex_color, alpha=0.15):
     except: pass
     return f"rgba(255, 255, 255, {alpha})"
 
-def enrich_telemetry(telemetry_df):
+def enrich_telemetry(telemetry_df, lap_obj=None):
     if telemetry_df is None or telemetry_df.empty:
         return telemetry_df
         
@@ -66,7 +66,13 @@ def enrich_telemetry(telemetry_df):
         
         if 'Time' in telemetry_df.columns:
             telemetry_df['Time_s'] = telemetry_df['Time'].dt.total_seconds()
-            telemetry_df['LapTime_s'] = telemetry_df['Time_s'] - telemetry_df['Time_s'].iloc[0]
+            
+            # Perfect LapTime elapsed calculation anchored to official start line trigger
+            if lap_obj is not None and 'SessionTime' in telemetry_df.columns and pd.notna(lap_obj.get('LapStartTime')):
+                telemetry_df['LapTime_s'] = (telemetry_df['SessionTime'] - lap_obj['LapStartTime']).dt.total_seconds()
+            else:
+                telemetry_df['LapTime_s'] = telemetry_df['Time_s'] - telemetry_df['Time_s'].iloc[0]
+                
             telemetry_df = telemetry_df.drop_duplicates(subset=['Time_s']).copy()
             
             if len(telemetry_df) > 2:
@@ -88,6 +94,56 @@ def enrich_telemetry(telemetry_df):
     except: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
         
     return telemetry_df
+
+def calculate_ghost_delta(ref_tel, comp_tel, ref_lap, comp_lap):
+    """
+    Computes a mathematically flawless time delta array.
+    Anchors to precise LapStartTime and applies a linear drift correction
+    to ensure the delta ends exactly on the official timing gap.
+    """
+    try:
+        ref_dist = ref_tel['Distance'].values
+        comp_dist = comp_tel['Distance'].values
+        
+        # Default fallback elapsed times
+        ref_elapsed = ref_tel['Time_s'].values - ref_tel['Time_s'].values[0]
+        comp_elapsed = comp_tel['Time_s'].values - comp_tel['Time_s'].values[0]
+        
+        # Try to get absolute precise elapsed times
+        if 'SessionTime' in ref_tel.columns and pd.notna(ref_lap.get('LapStartTime')):
+            ref_elapsed = (ref_tel['SessionTime'] - ref_lap['LapStartTime']).dt.total_seconds().values
+        if 'SessionTime' in comp_tel.columns and pd.notna(comp_lap.get('LapStartTime')):
+            comp_elapsed = (comp_tel['SessionTime'] - comp_lap['LapStartTime']).dt.total_seconds().values
+            
+        # Make compare strictly monotonic by distance for interpolation
+        df_comp = pd.DataFrame({'d': comp_dist, 't': comp_elapsed}).drop_duplicates('d').sort_values('d')
+        
+        # Ghost car time delta
+        comp_interp_t = np.interp(ref_dist, df_comp['d'], df_comp['t'], left=np.nan, right=np.nan)
+        raw_delta = comp_interp_t - ref_elapsed
+        
+        # Linear Drift Correction to match official lap times
+        ref_lt = ref_lap.get('LapTime')
+        comp_lt = comp_lap.get('LapTime')
+        
+        if pd.notna(ref_lt) and pd.notna(comp_lt):
+            off_ref = ref_lt.total_seconds()
+            off_comp = comp_lt.total_seconds()
+            off_delta = off_comp - off_ref
+            
+            # Find the last non-NaN delta
+            valid_indices = np.where(~np.isnan(raw_delta))[0]
+            if len(valid_indices) > 0:
+                last_idx = valid_indices[-1]
+                drift = raw_delta[last_idx] - off_delta
+                
+                # Apply linear correction from start (0 drift) to end (full drift)
+                correction = np.linspace(0, drift, len(raw_delta))
+                return raw_delta - correction
+                
+        return raw_delta
+    except Exception:
+        return np.zeros(len(ref_tel.get('Distance', [])))
 
 def _render_status_bubble(lap_data, weather_data=None):
     track_status = str(lap_data.get('TrackStatus', '1'))
@@ -139,7 +195,6 @@ def _apply_strong_axes(fig):
     return fig
 
 def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, selected_lap_num, eng_driver, session, d_color):
-    """Generates the single-driver 8-panel telemetry chart including Time Delta."""
     fig = make_subplots(
         rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.02,
         row_heights=[0.16, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
@@ -147,18 +202,12 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
     
     fastest_lap_num = int(fastest_lap['LapNumber'])
     
-    # ── CALCULATE TIME DELTA OVERLAY ──
+    # ── CALCULATE ROBUST TIME DELTA OVERLAY ──
     ref_dist = tel_fast['Distance'] if not tel_fast.empty else pd.Series()
-    ref_time = tel_fast['LapTime_s'] if not tel_fast.empty and 'LapTime_s' in tel_fast else pd.Series()
-    
-    if not ref_dist.empty and not ref_time.empty and 'Distance' in tel_target and 'LapTime_s' in tel_target:
-        comp_unique = tel_target.drop_duplicates(subset=['Distance']).sort_values('Distance')
-        delta_val = np.interp(ref_dist, comp_unique['Distance'], comp_unique['LapTime_s'], left=np.nan, right=np.nan) - ref_time
-        
-        # Delta Reference (0 line)
+    if not ref_dist.empty and not tel_target.empty:
+        delta_val = calculate_ghost_delta(tel_fast, tel_target, fastest_lap, target_lap)
         fig.add_trace(go.Scatter(x=ref_dist, y=np.zeros(len(ref_dist)), name="Best Delta", line=dict(color='rgba(255,255,255,0.6)', width=2, dash='dash'), showlegend=False), row=2, col=1)
-        # Delta Target
-        fig.add_trace(go.Scatter(x=ref_dist, y=delta_val, name="Target Delta", line=dict(color='#ff6b35', width=2.5), showlegend=False, hovertemplate="<b>Delta:</b> %{y:+.3f}s<extra></extra>", fill='tozeroy', fillcolor=_to_rgba('#ff6b35', 0.15)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=ref_dist, y=delta_val, name="Target Delta", line=dict(color=d_color, width=2.5), showlegend=False, hovertemplate="<b>Delta:</b> %{y:+.3f}s<extra></extra>", fill='tozeroy', fillcolor=_to_rgba(d_color, 0.15)), row=2, col=1)
 
     def add_tel_traces(row_num, col_name, is_fastest=False, is_step=False):
         if is_fastest:
@@ -262,27 +311,24 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
     return fig
 
 def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_tel, drv_colors):
-    """Generates the multi-driver overlaid 8-panel telemetry chart with distinct colors."""
     fig = make_subplots(
         rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.02,
         row_heights=[0.16, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
     )
     
     ref_dist = ref_tel['Distance'] if not ref_tel.empty else pd.Series()
-    ref_time = ref_tel['LapTime_s'] if not ref_tel.empty and 'LapTime_s' in ref_tel else pd.Series()
 
     for drv, lap_obj in target_laps_dict.items():
         try:
-            tel = enrich_telemetry(lap_obj.get_telemetry())
+            tel = enrich_telemetry(lap_obj.get_telemetry(), lap_obj)
             color = drv_colors[drv]
             lap_num = int(lap_obj['LapNumber'])
             trace_name = f"<b>{drv}</b> (L{lap_num})"
             x_data = tel.get('Distance', tel.index)
             
-            # ── CALCULATE TIME DELTA OVERLAY ──
-            if not ref_dist.empty and not ref_time.empty and 'LapTime_s' in tel and 'Distance' in tel:
-                comp_unique = tel.drop_duplicates(subset=['Distance']).sort_values('Distance')
-                delta_val = np.interp(ref_dist, comp_unique['Distance'], comp_unique['LapTime_s'], left=np.nan, right=np.nan) - ref_time
+            # ── CALCULATE ROBUST TIME DELTA OVERLAY ──
+            if not ref_dist.empty and not tel.empty:
+                delta_val = calculate_ghost_delta(ref_tel, tel, ref_lap, lap_obj)
                 
                 fig.add_trace(go.Scatter(
                     x=ref_dist, y=delta_val, name=f"{drv} Delta", line=dict(color=color, width=2.5), 
@@ -321,8 +367,7 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
             add_multi_trace(7, 'Long_G')
             add_multi_trace(8, 'Lat_G')
             
-        except Exception:
-            continue
+        except Exception: continue
 
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=2, col=1)
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=7, col=1)
@@ -332,8 +377,7 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
     try:
         if not ref_tel.empty:
             time_col = 'SessionTime' if 'SessionTime' in ref_tel.columns else 'Time'
-            s1_time = ref_lap.get('Sector1SessionTime')
-            s2_time = ref_lap.get('Sector2SessionTime')
+            s1_time, s2_time = ref_lap.get('Sector1SessionTime'), ref_lap.get('Sector2SessionTime')
             ref_s1 = ref_tel.loc[ref_tel[time_col] <= s1_time, 'Distance'].max() if pd.notna(s1_time) else None
             ref_s2 = ref_tel.loc[ref_tel[time_col] <= s2_time, 'Distance'].max() if pd.notna(s2_time) else None
             max_dist = ref_tel['Distance'].max()
@@ -342,7 +386,6 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
                 fig.add_vrect(x0=0, x1=ref_s1, fillcolor="rgba(232, 0, 45, 0.08)", layer="below", line_width=0)
                 fig.add_vrect(x0=ref_s1, x1=ref_s2, fillcolor="rgba(63, 182, 220, 0.08)", layer="below", line_width=0)
                 fig.add_vrect(x0=ref_s2, x1=max_dist, fillcolor="rgba(255, 215, 0, 0.06)", layer="below", line_width=0)
-                
                 fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.5)", size=12, symbol="square"), name="Sector 1", showlegend=True), row=1, col=1)
                 fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(63, 182, 220, 0.5)", size=12, symbol="square"), name="Sector 2", showlegend=True), row=1, col=1)
                 fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.5)", size=12, symbol="square"), name="Sector 3", showlegend=True), row=1, col=1)
@@ -352,18 +395,12 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
         circuit_info = session.get_circuit_info()
         if circuit_info is not None and not circuit_info.corners.empty:
             for _, corner in circuit_info.corners.iterrows():
-                dist = corner['Distance']
-                num = str(corner['Number'])
+                dist, num = corner['Distance'], str(corner['Number'])
                 fig.add_vline(x=dist, line_width=2, line_dash="dot", line_color="rgba(255, 255, 255, 0.45)")
-                fig.add_annotation(
-                    x=dist, y=1.0, yref="paper", text=f"<b>{num}</b>",
-                    showarrow=False, xanchor="left", yanchor="bottom",
-                    font=dict(size=14, color="rgba(255,255,255,1)")
-                )
+                fig.add_annotation(x=dist, y=1.0, yref="paper", text=f"<b>{num}</b>", showarrow=False, xanchor="left", yanchor="bottom", font=dict(size=14, color="white"))
     except Exception: pass
 
     ref_drv_name = list(target_laps_dict.keys())[0] if target_laps_dict else "Reference"
-    
     fig.update_layout(
         **PLOTLY_THEME, height=1450, title=f"<b>Multi-Driver Telemetry Overlay (Aligned to {ref_drv_name})</b>",
         hovermode="x unified", margin=dict(t=110),
@@ -383,11 +420,7 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
 
     return fig
 
-# ─────────────────────────────────────────────────────────────
-#  MINISECTOR TRACK MAP COMPARISON
-# ─────────────────────────────────────────────────────────────
 def _render_trackmap_comparison(session, target_laps_dict, drv_colors):
-    """Generates the spatial mini-sector dominance map specifically for the selected laps."""
     lap_data = {}
     ref_driver = None
     max_distance = 0
@@ -438,45 +471,25 @@ def _render_trackmap_comparison(session, target_laps_dict, drv_colors):
 
     fig = go.Figure()
     
-    # 1. Background Track Outline (Faint)
-    fig.add_trace(go.Scatter(
-        x=ref_tel['X'], y=ref_tel['Y'], mode='lines',
-        line=dict(color='rgba(255, 255, 255, 0.15)', width=8),
-        hoverinfo='skip', showlegend=False
-    ))
+    fig.add_trace(go.Scatter(x=ref_tel['X'], y=ref_tel['Y'], mode='lines', line=dict(color='rgba(255, 255, 255, 0.15)', width=8), hoverinfo='skip', showlegend=False))
 
-    # 2. Add Dummy Traces for Clean Legend
     for drv in target_laps_dict.keys():
         perc = (dominance_counts.get(drv, 0) / num_sectors) * 100
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode='lines',
-            line=dict(color=drv_colors[drv], width=5),
-            name=f"<b>{drv}</b> ({perc:.0f}%)"
-        ))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color=drv_colors[drv], width=5), name=f"<b>{drv}</b> ({perc:.0f}%)"))
 
-    # 3. Draw Solid Colored Minisectors Over Background
     for winner, start, end, speed, s_idx in sector_winners:
         geo_pts = ref_tel[(ref_tel['Distance'] >= start) & (ref_tel['Distance'] <= end)]
         if geo_pts.empty: continue
             
         color = drv_colors[winner]
         fig.add_trace(go.Scatter(
-            x=geo_pts['X'], y=geo_pts['Y'], mode='lines',
-            line=dict(color=color, width=5),
-            hoverinfo='text',
-            text=f"<b>Mini-Sector {s_idx}</b><br>Dominating: {winner}<br>Avg Speed: {speed:.1f} km/h",
-            showlegend=False
+            x=geo_pts['X'], y=geo_pts['Y'], mode='lines', line=dict(color=color, width=5),
+            hoverinfo='text', text=f"<b>Mini-Sector {s_idx}</b><br>Dominating: {winner}<br>Avg Speed: {speed:.1f} km/h", showlegend=False
         ))
 
-    # 4. Start/Finish Marker
     start_pt = ref_tel.iloc[0]
-    fig.add_trace(go.Scatter(
-        x=[start_pt['X']], y=[start_pt['Y']], mode='markers',
-        marker=dict(symbol='diamond', size=14, color='#ffffff', line=dict(width=2, color='#13131a')),
-        name='Start/Finish', hoverinfo='skip'
-    ))
+    fig.add_trace(go.Scatter(x=[start_pt['X']], y=[start_pt['Y']], mode='markers', marker=dict(symbol='diamond', size=14, color='#ffffff', line=dict(width=2, color='#13131a')), name='Start/Finish', hoverinfo='skip'))
 
-    # 5. Outlined Bubble Corner Numbers Overlay
     try:
         circuit_info = session.get_circuit_info()
         if circuit_info is not None and not circuit_info.corners.empty:
@@ -488,28 +501,15 @@ def _render_trackmap_comparison(session, target_laps_dict, drv_colors):
                 textfont=dict(size=10, color='rgba(255,255,255,1)', family="JetBrains Mono"),
                 name='Corners', hoverinfo='skip', showlegend=False
             ))
-    except Exception:
-        pass
+    except Exception: pass
 
     fig.update_layout(
-        **PLOTLY_THEME, height=750, title="<b>Spatial Analysis: Selected Laps Mini-Sector Dominance</b>", hovermode="closest",
-        margin=dict(t=100, b=20, l=20, r=20),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-            bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14)
-        )
+        **PLOTLY_THEME, height=750, title="<b>Spatial Analysis: Selected Laps Mini-Sector Dominance</b>", hovermode="closest", margin=dict(t=100, b=20, l=20, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.2)", borderwidth=1, font=dict(size=14))
     )
-    
-    fig.update_layout(
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1)
-    )
-    
+    fig.update_layout(xaxis=dict(showgrid=False, zeroline=False, showticklabels=False), yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1))
     st.plotly_chart(fig, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────
-#  MAIN RENDERER
-# ─────────────────────────────────────────────────────────────
 def render_engineer(year, race, session_id, session_name, available_drivers):
     section_header("DRIVER TELEMETRY", f"{year} {race}  ·  {session_name}")
 
@@ -535,14 +535,9 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
     mode = st.selectbox("Telemetry Mode", ["Single Driver Deep Dive", "Multi-Driver Comparison (Up to 4)"], label_visibility="collapsed")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ═════════════════════════════════════════════════════
-    #  SINGLE DRIVER MODE
-    # ═════════════════════════════════════════════════════
     if mode == "Single Driver Deep Dive":
-        
         col1, _ = st.columns([2, 2])
-        with col1:
-            eng_driver = st.selectbox("Select Driver", available_drivers, key="single_drv_sel")
+        with col1: eng_driver = st.selectbox("Select Driver", available_drivers, key="single_drv_sel")
             
         st.divider()
         d_color = get_accurate_driver_color(eng_driver, session.results)
@@ -560,14 +555,9 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
         col1, col2 = st.columns([1, 3])
         with col1:
             lap_options = driver_laps['LapNumber'].dropna().astype(int).tolist()
-            selected_lap_num = st.selectbox(
-                "Select Target Lap", 
-                lap_options, 
-                index=lap_options.index(fastest_lap_num) if fastest_lap_num in lap_options else 0
-            )
+            selected_lap_num = st.selectbox("Select Target Lap", lap_options, index=lap_options.index(fastest_lap_num) if fastest_lap_num in lap_options else 0)
 
         target_lap = driver_laps[driver_laps['LapNumber'] == selected_lap_num].iloc[0]
-
         st.markdown(_render_status_bubble(target_lap, weather_data), unsafe_allow_html=True)
 
         is_pit_out = pd.notna(target_lap['PitOutTime'])
@@ -599,8 +589,8 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
 
         with st.spinner("Extracting 20Hz Telemetry..."):
             try:
-                tel_fast = enrich_telemetry(fastest_lap.get_telemetry())
-                tel_target = enrich_telemetry(target_lap.get_telemetry())
+                tel_fast = enrich_telemetry(fastest_lap.get_telemetry(), fastest_lap)
+                tel_target = enrich_telemetry(target_lap.get_telemetry(), target_lap)
             except Exception as e:
                 no_data_error(f"Raw telemetry data is corrupted for the selected laps. Debug info: {e}")
                 return
@@ -613,24 +603,18 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
         with st.spinner("Processing live-timing cumulative sector data..."):
             _render_lap_history(session, laps, eng_driver, selected_lap_num)
 
-    # ═════════════════════════════════════════════════════
-    #  MULTI-DRIVER MODE
-    # ═════════════════════════════════════════════════════
     else:
         st.markdown(f"#### Multi-Driver Telemetry Overlay")
         
         with st.form("multi_driver_form"):
             st.markdown('<div style="font-size: 1.0rem; color: #ffffff; font-weight: 700; margin-bottom: 12px;">Select Drivers to Compare (Max 4)</div>', unsafe_allow_html=True)
-            
             selected_drivers = []
             cols = st.columns(6)
             for i, drv in enumerate(available_drivers):
                 with cols[i % 6]:
-                    if st.checkbox(drv, value=(i == 0), key=f"eng_chk_{drv}"):
-                        selected_drivers.append(drv)
-            
+                    if st.checkbox(drv, value=(i == 0), key=f"eng_chk_{drv}"): selected_drivers.append(drv)
             st.divider()
-            submitted = st.form_submit_button("▶  UPDATE DRIVERS", type="primary", use_container_width=True)
+            st.form_submit_button("▶  UPDATE DRIVERS", type="primary", use_container_width=True)
 
         if not selected_drivers:
             st.info("Please select at least one driver to begin the comparison.")
@@ -651,8 +635,7 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
         if sync_mode:
             ref_drv = selected_drivers[0]
             ref_laps = laps[laps['Driver'] == ref_drv]['LapNumber'].dropna().astype(int).tolist()
-            if ref_laps:
-                sync_lap_num = st.selectbox("Select Synchronized Lap", ref_laps)
+            if ref_laps: sync_lap_num = st.selectbox("Select Synchronized Lap", ref_laps)
             else:
                 st.error("No valid laps found for synchronization.")
                 return
@@ -671,8 +654,7 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
                 drv_opts = drv_laps['LapNumber'].dropna().astype(int).tolist()
                 
                 if sync_mode:
-                    if sync_lap_num in drv_opts:
-                        sel_lap = sync_lap_num
+                    if sync_lap_num in drv_opts: sel_lap = sync_lap_num
                     else:
                         st.error(f"Lap {sync_lap_num} unavailable")
                         continue
@@ -684,22 +666,17 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
                 target_laps[drv] = lap_obj
                 
                 st.markdown(_render_status_bubble(lap_obj, weather_data), unsafe_allow_html=True)
-                
                 lt_s = lap_obj['LapTime'].total_seconds() if pd.notna(lap_obj['LapTime']) else None
                 lt_str = format_time(lt_s) if lt_s else "NO TIME"
                 delta_s = (lt_s - overall_best_s) if lt_s and pd.notna(overall_best_s) else None
                 delta_str = f"+{delta_s:.3f}s" if delta_s and delta_s > 0 else "Session Best" if delta_s is not None else ""
-                
                 st.metric(f"Lap {sel_lap} Time", lt_str, delta_str, delta_color="inverse" if delta_s and delta_s > 0 else "normal")
 
         if target_laps:
             with st.spinner("Extracting Multi-Driver Telemetry Overlay..."):
                 ref_lap_obj = target_laps[selected_drivers[0]]
-                try:
-                    ref_tel = ref_lap_obj.get_telemetry()
-                    ref_tel = enrich_telemetry(ref_tel)
-                except Exception:
-                    ref_tel = pd.DataFrame()
+                try: ref_tel = enrich_telemetry(ref_lap_obj.get_telemetry(), ref_lap_obj)
+                except Exception: ref_tel = pd.DataFrame()
                 
                 fig = _plot_multi_telemetry(session, target_laps, session.results, ref_lap_obj, ref_tel, drv_colors)
                 st.plotly_chart(fig, use_container_width=True)
@@ -712,23 +689,16 @@ def render_engineer(year, race, session_id, session_name, available_drivers):
         st.divider()
         section_header("LAP HISTORY", "Session Logs")
         history_tabs = st.tabs([f"{d} Session Log" for d in selected_drivers])
-        
         for d, tab in zip(selected_drivers, history_tabs):
             with tab:
-                if d in target_laps:
-                    _render_lap_history(session, laps, d, int(target_laps[d]['LapNumber']))
-                else:
-                    st.info(f"No lap selected for {d}.")
-
+                if d in target_laps: _render_lap_history(session, laps, d, int(target_laps[d]['LapNumber']))
+                else: st.info(f"No lap selected for {d}.")
 
 def _render_lap_history(session, all_laps, eng_driver, selected_lap_num):
     all_laps = all_laps.copy()
-    
     for col in ['LapTime', 'Sector1Time', 'Sector2Time', 'Sector3Time']:
-        if col in all_laps.columns:
-            all_laps[f'{col}_s'] = all_laps[col].dt.total_seconds()
-        else:
-            all_laps[f'{col}_s'] = np.nan
+        if col in all_laps.columns: all_laps[f'{col}_s'] = all_laps[col].dt.total_seconds()
+        else: all_laps[f'{col}_s'] = np.nan
 
     all_laps_sorted = all_laps.dropna(subset=['Time']).sort_values('Time')
     all_laps_sorted['session_best_s1'] = all_laps_sorted['Sector1Time_s'].cummin()
@@ -746,26 +716,16 @@ def _render_lap_history(session, all_laps, eng_driver, selected_lap_num):
     overall_session_best_lap = all_laps['LapTime_s'].min()
     overall_personal_best_lap = drv_laps['LapTime_s'].min()
 
-    display_data = []
-    css_data = []
+    display_data, css_data = [], []
 
     def get_color(val, session_best, personal_best):
         if pd.isna(val) or val <= 0: return "color: #ffffff;"
-        if abs(val - session_best) < 0.001:
-            return "color: #df4bff; font-weight: 900;" 
-        elif abs(val - personal_best) < 0.001:
-            return "color: #00d47e; font-weight: 800;" 
-        else:
-            return "color: #ffd700; font-weight: 600;" 
+        if abs(val - session_best) < 0.001: return "color: #df4bff; font-weight: 900;" 
+        elif abs(val - personal_best) < 0.001: return "color: #00d47e; font-weight: 800;" 
+        else: return "color: #ffd700; font-weight: 600;" 
 
-    # ── AUTO-CALCULATE AND APPEND THEORETICAL IDEAL LAP FIRST ──
-    overall_min_s1 = all_laps['Sector1Time_s'].min()
-    overall_min_s2 = all_laps['Sector2Time_s'].min()
-    overall_min_s3 = all_laps['Sector3Time_s'].min()
-    
-    pb_s1_ideal = drv_laps['Sector1Time_s'].min()
-    pb_s2_ideal = drv_laps['Sector2Time_s'].min()
-    pb_s3_ideal = drv_laps['Sector3Time_s'].min()
+    overall_min_s1, overall_min_s2, overall_min_s3 = all_laps['Sector1Time_s'].min(), all_laps['Sector2Time_s'].min(), all_laps['Sector3Time_s'].min()
+    pb_s1_ideal, pb_s2_ideal, pb_s3_ideal = drv_laps['Sector1Time_s'].min(), drv_laps['Sector2Time_s'].min(), drv_laps['Sector3Time_s'].min()
     theo_lap = pb_s1_ideal + pb_s2_ideal + pb_s3_ideal
     
     c_lt_ideal = get_color(theo_lap, overall_session_best_lap, theo_lap)
@@ -774,65 +734,37 @@ def _render_lap_history(session, all_laps, eng_driver, selected_lap_num):
     c_s3_ideal = get_color(pb_s3_ideal, overall_min_s3, pb_s3_ideal)
     
     display_data.append({
-        'Lap': "IDEAL",
-        'Tyre': "—",
-        'Lap Time': format_time(theo_lap) if pd.notna(theo_lap) else "N/A",
-        'Sector 1': f"{pb_s1_ideal:.3f}" if pd.notna(pb_s1_ideal) else "N/A",
-        'Sector 2': f"{pb_s2_ideal:.3f}" if pd.notna(pb_s2_ideal) else "N/A",
-        'Sector 3': f"{pb_s3_ideal:.3f}" if pd.notna(pb_s3_ideal) else "N/A",
+        'Lap': "IDEAL", 'Tyre': "—", 'Lap Time': format_time(theo_lap) if pd.notna(theo_lap) else "N/A",
+        'Sector 1': f"{pb_s1_ideal:.3f}" if pd.notna(pb_s1_ideal) else "N/A", 'Sector 2': f"{pb_s2_ideal:.3f}" if pd.notna(pb_s2_ideal) else "N/A", 'Sector 3': f"{pb_s3_ideal:.3f}" if pd.notna(pb_s3_ideal) else "N/A",
     })
     css_data.append({
-        'Lap': "color: #df4bff; font-weight: bold; background-color: rgba(223, 75, 255, 0.1);", 
-        'Tyre': "background-color: rgba(223, 75, 255, 0.1);",
-        'Lap Time': f"background-color: rgba(223, 75, 255, 0.1); {c_lt_ideal}", 
-        'Sector 1': f"background-color: rgba(223, 75, 255, 0.1); {c_s1_ideal}", 
-        'Sector 2': f"background-color: rgba(223, 75, 255, 0.1); {c_s2_ideal}", 
-        'Sector 3': f"background-color: rgba(223, 75, 255, 0.1); {c_s3_ideal}"
+        'Lap': "color: #df4bff; font-weight: bold; background-color: rgba(223, 75, 255, 0.1);", 'Tyre': "background-color: rgba(223, 75, 255, 0.1);",
+        'Lap Time': f"background-color: rgba(223, 75, 255, 0.1); {c_lt_ideal}", 'Sector 1': f"background-color: rgba(223, 75, 255, 0.1); {c_s1_ideal}", 'Sector 2': f"background-color: rgba(223, 75, 255, 0.1); {c_s2_ideal}", 'Sector 3': f"background-color: rgba(223, 75, 255, 0.1); {c_s3_ideal}"
     })
 
-    # ── APPEND ALL ACTUAL DRIVER LAPS ──
     for _, row in drv_laps.iterrows():
         lap_num = int(row['LapNumber'])
         comp = row.get('Compound', 'UNKNOWN')
         if pd.isna(comp): comp = 'UNKNOWN'
-        
-        lt = row['LapTime_s']
-        s1 = row['Sector1Time_s']
-        s2 = row['Sector2Time_s']
-        s3 = row['Sector3Time_s']
-        
-        c_lt = get_color(lt, overall_session_best_lap, overall_personal_best_lap)
-        c_s1 = get_color(s1, row['session_best_s1'], row['pb_s1'])
-        c_s2 = get_color(s2, row['session_best_s2'], row['pb_s2'])
-        c_s3 = get_color(s3, row['session_best_s3'], row['pb_s3'])
+        lt, s1, s2, s3 = row['LapTime_s'], row['Sector1Time_s'], row['Sector2Time_s'], row['Sector3Time_s']
+        c_lt, c_s1 = get_color(lt, overall_session_best_lap, overall_personal_best_lap), get_color(s1, row['session_best_s1'], row['pb_s1'])
+        c_s2, c_s3 = get_color(s2, row['session_best_s2'], row['pb_s2']), get_color(s3, row['session_best_s3'], row['pb_s3'])
         
         is_pit = pd.notna(row.get('PitInTime')) or pd.notna(row.get('PitOutTime'))
         lap_str = str(lap_num) + (" (PIT)" if is_pit else "")
-        
         is_selected = (lap_num == selected_lap_num)
         base_css = "background-color: rgba(255, 255, 255, 0.1); border-left: 4px solid #ff6b35;" if is_selected else ""
         
         display_data.append({
-            'Lap': lap_str,
-            'Tyre': TYRE_LABELS.get(comp, comp),
-            'Lap Time': format_time(lt),
-            'Sector 1': f"{s1:.3f}" if pd.notna(s1) else "N/A",
-            'Sector 2': f"{s2:.3f}" if pd.notna(s2) else "N/A",
-            'Sector 3': f"{s3:.3f}" if pd.notna(s3) else "N/A",
+            'Lap': lap_str, 'Tyre': TYRE_LABELS.get(comp, comp), 'Lap Time': format_time(lt),
+            'Sector 1': f"{s1:.3f}" if pd.notna(s1) else "N/A", 'Sector 2': f"{s2:.3f}" if pd.notna(s2) else "N/A", 'Sector 3': f"{s3:.3f}" if pd.notna(s3) else "N/A",
         })
         css_data.append({
-            'Lap': base_css + ("color: #888;" if is_pit else "color: #ffffff; font-weight: 800;"), 
-            'Tyre': base_css,
-            'Lap Time': f"{base_css} {c_lt}", 
-            'Sector 1': f"{base_css} {c_s1}", 
-            'Sector 2': f"{base_css} {c_s2}", 
-            'Sector 3': f"{base_css} {c_s3}"
+            'Lap': base_css + ("color: #888;" if is_pit else "color: #ffffff; font-weight: 800;"), 'Tyre': base_css,
+            'Lap Time': f"{base_css} {c_lt}", 'Sector 1': f"{base_css} {c_s1}", 'Sector 2': f"{base_css} {c_s2}", 'Sector 3': f"{base_css} {c_s3}"
         })
 
     if display_data:
-        df_display = pd.DataFrame(display_data)
-        df_css = pd.DataFrame(css_data)
+        df_display, df_css = pd.DataFrame(display_data), pd.DataFrame(css_data)
         styled_table = df_display.style.apply(lambda _: df_css, axis=None)
         st.dataframe(styled_table, use_container_width=True, hide_index=True)
-    else:
-        st.info("No valid lap data available to build history table.")

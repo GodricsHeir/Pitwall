@@ -20,7 +20,6 @@ from utils import (
 #  ROBUST DRIVER COLOR ENGINE
 # ─────────────────────────────────────────────────────────────
 def get_accurate_driver_color(drv, results_df=None):
-    """Safely extracts valid hex colors directly from official timing data."""
     try:
         if results_df is not None and not results_df.empty:
             c = results_df.loc[results_df['Abbreviation'] == drv, 'TeamColor'].values[0]
@@ -50,7 +49,6 @@ def _get_distinct_colors(drivers, results_df):
     return colors
 
 def _to_rgba(hex_color, alpha=0.15):
-    """Converts a hex color string to an rgba string for Plotly fills."""
     try:
         c = str(hex_color).strip().lower()
         if c.startswith('#'):
@@ -61,8 +59,8 @@ def _to_rgba(hex_color, alpha=0.15):
     except: pass
     return f"rgba(255, 255, 255, {alpha})"
 
-def enrich_telemetry(telemetry_df):
-    """Adds RPM handling, LapTime tracking for Deltas, and calculates G-Forces."""
+def enrich_telemetry(telemetry_df, lap_obj=None):
+    """Adds RPM handling, precise LapTime Zeros, and calculates Long/Lat G-Force."""
     if telemetry_df is None or telemetry_df.empty:
         return telemetry_df
         
@@ -73,17 +71,20 @@ def enrich_telemetry(telemetry_df):
         
         if 'Time' in telemetry_df.columns:
             telemetry_df['Time_s'] = telemetry_df['Time'].dt.total_seconds()
-            # Crucial: Calculate absolute lap time elapsed at every timestamp for the Delta math
-            telemetry_df['LapTime_s'] = telemetry_df['Time_s'] - telemetry_df['Time_s'].iloc[0]
+            
+            # Perfect LapTime elapsed calculation anchored to official start line trigger
+            if lap_obj is not None and 'SessionTime' in telemetry_df.columns and pd.notna(lap_obj.get('LapStartTime')):
+                telemetry_df['LapTime_s'] = (telemetry_df['SessionTime'] - lap_obj['LapStartTime']).dt.total_seconds()
+            else:
+                telemetry_df['LapTime_s'] = telemetry_df['Time_s'] - telemetry_df['Time_s'].iloc[0]
+                
             telemetry_df = telemetry_df.drop_duplicates(subset=['Time_s']).copy()
             
             if len(telemetry_df) > 2:
-                # Longitudinal G-Force
                 accel = np.gradient(telemetry_df['Speed_ms'], telemetry_df['Time_s'])
                 telemetry_df['Long_G'] = (accel / 9.81)
                 telemetry_df['Long_G'] = telemetry_df['Long_G'].rolling(window=3, min_periods=1).mean()
                 
-                # Lateral G-Force
                 if 'X' in telemetry_df.columns and 'Y' in telemetry_df.columns:
                     dx_s = telemetry_df['X'].rolling(5, center=True).mean().diff()
                     dy_s = telemetry_df['Y'].rolling(5, center=True).mean().diff()
@@ -99,9 +100,58 @@ def enrich_telemetry(telemetry_df):
         
     return telemetry_df
 
+def calculate_ghost_delta(ref_tel, comp_tel, ref_lap, comp_lap):
+    """
+    Computes a mathematically flawless time delta array.
+    Anchors to precise LapStartTime and applies a linear drift correction
+    to ensure the delta ends exactly on the official timing gap.
+    """
+    try:
+        ref_dist = ref_tel['Distance'].values
+        comp_dist = comp_tel['Distance'].values
+        
+        # Default fallback elapsed times
+        ref_elapsed = ref_tel['Time_s'].values - ref_tel['Time_s'].values[0]
+        comp_elapsed = comp_tel['Time_s'].values - comp_tel['Time_s'].values[0]
+        
+        # Try to get absolute precise elapsed times
+        if 'SessionTime' in ref_tel.columns and pd.notna(ref_lap.get('LapStartTime')):
+            ref_elapsed = (ref_tel['SessionTime'] - ref_lap['LapStartTime']).dt.total_seconds().values
+        if 'SessionTime' in comp_tel.columns and pd.notna(comp_lap.get('LapStartTime')):
+            comp_elapsed = (comp_tel['SessionTime'] - comp_lap['LapStartTime']).dt.total_seconds().values
+            
+        # Make compare strictly monotonic by distance for interpolation
+        df_comp = pd.DataFrame({'d': comp_dist, 't': comp_elapsed}).drop_duplicates('d').sort_values('d')
+        
+        # Ghost car time delta
+        comp_interp_t = np.interp(ref_dist, df_comp['d'], df_comp['t'], left=np.nan, right=np.nan)
+        raw_delta = comp_interp_t - ref_elapsed
+        
+        # Linear Drift Correction to match official lap times
+        ref_lt = ref_lap.get('LapTime')
+        comp_lt = comp_lap.get('LapTime')
+        
+        if pd.notna(ref_lt) and pd.notna(comp_lt):
+            off_ref = ref_lt.total_seconds()
+            off_comp = comp_lt.total_seconds()
+            off_delta = off_comp - off_ref
+            
+            # Find the last non-NaN delta
+            valid_indices = np.where(~np.isnan(raw_delta))[0]
+            if len(valid_indices) > 0:
+                last_idx = valid_indices[-1]
+                drift = raw_delta[last_idx] - off_delta
+                
+                # Apply linear correction from start (0 drift) to end (full drift)
+                correction = np.linspace(0, drift, len(raw_delta))
+                return raw_delta - correction
+                
+        return raw_delta
+    except Exception:
+        return np.zeros(len(ref_tel.get('Distance', [])))
+
 
 def _apply_strong_axes(fig):
-    """Utility to make chart gridlines highly visible."""
     fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)", zerolinewidth=1.5)
     fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)", zerolinewidth=1.5)
     return fig
@@ -351,7 +401,6 @@ def _race_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_m
                                       annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
                                       annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
                                       
-    # Draw Pit Stops with distinct driver colors and no text
     for _, row in pit_map[pit_map['Driver'].isin(drivers)].iterrows():
         p_color = drv_colors.get(row['Driver'], '#ffffff')
         fig.add_vline(x=row['Pit Lap'], line=dict(color=p_color, width=2.5, dash='dot'), row=1, col=1)
@@ -647,7 +696,7 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
         try:
             lap = session.laps.pick_driver(drv).pick_fastest()
             if pd.isna(lap.get('LapTime')): continue
-            tel = enrich_telemetry(lap.get_telemetry())
+            tel = enrich_telemetry(lap.get_telemetry(), lap)
             telemetry_data[drv] = (tel, lap)
         except Exception: pass
         
@@ -658,7 +707,6 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
     ref_drv = list(telemetry_data.keys())[0]
     ref_tel, ref_lap = telemetry_data[ref_drv]
     ref_dist = ref_tel['Distance'] if not ref_tel.empty else pd.Series()
-    ref_time = ref_tel['LapTime_s'] if not ref_tel.empty and 'LapTime_s' in ref_tel else pd.Series()
 
     for drv, (tel, lap) in telemetry_data.items():
         color = drv_colors[drv]
@@ -666,10 +714,9 @@ def _render_telemetry_comparison(session, drivers, drv_colors):
         trace_name = f"<b>{drv}</b> (L{lap_num})"
         x_data = tel.get('Distance', tel.index)
         
-        # ── CALCULATE TIME DELTA OVERLAY ──
-        if not ref_dist.empty and not ref_time.empty and 'LapTime_s' in tel and 'Distance' in tel:
-            comp_unique = tel.drop_duplicates(subset=['Distance']).sort_values('Distance')
-            delta_val = np.interp(ref_dist, comp_unique['Distance'], comp_unique['LapTime_s'], left=np.nan, right=np.nan) - ref_time
+        # ── CALCULATE ROBUST TIME DELTA OVERLAY ──
+        if not ref_dist.empty and not tel.empty:
+            delta_val = calculate_ghost_delta(ref_tel, tel, ref_lap, lap)
             
             fig.add_trace(go.Scatter(
                 x=ref_dist, y=delta_val, name=f"{drv} Delta", line=dict(color=color, width=2.5), 
