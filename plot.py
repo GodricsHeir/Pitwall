@@ -16,7 +16,6 @@ from utils import (
 )
 
 def get_accurate_driver_color(drv, results_df=None):
-    """Safely extracts valid hex colors directly from official timing data."""
     try:
         if results_df is not None and not results_df.empty:
             c = results_df.loc[results_df['Abbreviation'] == drv, 'TeamColor'].values[0]
@@ -31,7 +30,6 @@ def get_accurate_driver_color(drv, results_df=None):
 def render_plot(year, race, session_id, session_name, selected_driver, available_drivers, show_annotations=True):
     section_header("PACE TRACE", f"{year} {race}  ·  {session_name}")
 
-    # ── 1. LOAD DATA & WEATHER ───────────────────────────
     session, laps, err = safe_load_session(year, race, session_id, messages=True, weather=True)
     if err:
         no_data_error(err)
@@ -39,34 +37,28 @@ def render_plot(year, race, session_id, session_name, selected_driver, available
 
     results_df = getattr(session, 'results', pd.DataFrame())
 
-    # ── 1.5 MERGE WEATHER DATA SAFELY ────────────────────
     if not laps.empty:
         try:
             weather_df = laps.get_weather_data()
             for col in weather_df.columns:
                 if col not in laps.columns:
                     laps[col] = weather_df[col].values
-        except Exception:
-            pass # Failsafe if meteorological data is missing
+        except Exception: pass
 
-    # ── 1.6 LIVE TIMING SECTOR ENGINE (Purple/Green) ─────
     laps_sorted = laps.dropna(subset=['Time']).sort_values('Time').copy()
     
     for col in ['Sector1Time', 'Sector2Time', 'Sector3Time']:
         s_col = f"{col[:7]}_s"
         laps_sorted[s_col] = laps_sorted[col].dt.total_seconds()
         
-    # Calculate Session Bests (Cumulative)
     laps_sorted['Session_S1'] = laps_sorted['Sector1_s'].cummin()
     laps_sorted['Session_S2'] = laps_sorted['Sector2_s'].cummin()
     laps_sorted['Session_S3'] = laps_sorted['Sector3_s'].cummin()
     
-    # Calculate Personal Bests (Cumulative)
     laps_sorted['PB_S1'] = laps_sorted.groupby('Driver')['Sector1_s'].cummin()
     laps_sorted['PB_S2'] = laps_sorted.groupby('Driver')['Sector2_s'].cummin()
     laps_sorted['PB_S3'] = laps_sorted.groupby('Driver')['Sector3_s'].cummin()
 
-    # Calculate Gap to Ahead (Dirty Air)
     laps_sorted['GapToAhead'] = laps_sorted['Time'].diff().dt.total_seconds()
     laps_sorted['Is_Dirty_Air'] = laps_sorted['GapToAhead'] < 2.0
 
@@ -90,7 +82,6 @@ def render_plot(year, race, session_id, session_name, selected_driver, available
 
     is_race = session_id in ['R', 'S', 'SQ']
 
-    # ── 2. TOP METRICS ────────────────────────────────────
     if selected_driver != "ALL":
         _render_driver_metrics(plot_laps, fastest_overall, session, selected_driver, results_df)
     else:
@@ -98,7 +89,6 @@ def render_plot(year, race, session_id, session_name, selected_driver, available
 
     st.divider()
 
-    # ── 3. CHART ──────────────────────────────────────────
     if is_race:
         fig = _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotations, pit_map, session, results_df)
     else:
@@ -107,12 +97,10 @@ def render_plot(year, race, session_id, session_name, selected_driver, available
     fig.update_layout(**PLOTLY_THEME)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 4. STINT TABLE ────────────────────────────────────
     st.divider()
     section_header("ANALYTICS", "Stint Breakdown")
     _render_stint_table(plot_laps, pit_map, fastest_overall)
 
-    # ── 5. LAP DELTA WATERFALL (single driver) ────────────
     if selected_driver != "ALL" and is_race:
         st.divider()
         section_header("ANALYTICS", "Lap Delta vs Session Best")
@@ -120,9 +108,9 @@ def render_plot(year, race, session_id, session_name, selected_driver, available
 
 
 # ─────────────────────────────────────────────────────────────
-#  ADVANCED RACE TRACE
+#  ADVANCED TRACE & SCATTER CHARTS (HIGH BIFURCATION)
 # ─────────────────────────────────────────────────────────────
-def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotations, pit_map, session, results_df):
+def _create_hover_text(plot_laps):
     def get_weather_state(row):
         rain = row.get('Rainfall', False)
         temp = row.get('TrackTemp', 30.0)
@@ -163,6 +151,11 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
                 f"Track Temp: {tt}")
 
     plot_laps['HoverText'] = plot_laps.apply(create_hover, axis=1)
+    return plot_laps
+
+
+def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotations, pit_map, session, results_df):
+    plot_laps = _create_hover_text(plot_laps.copy())
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
@@ -170,24 +163,36 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
+    # High Contrast Symbol & Dash Libraries
+    symbols = ['circle', 'diamond', 'square', 'triangle-up', 'hexagon', 'star', 'cross']
+    dashes = ['solid', 'dash', 'dot', 'longdash', 'dashdot']
+
     if selected_driver != "ALL":
-        for stint in plot_laps['Stint'].unique():
+        for i, stint in enumerate(plot_laps['Stint'].unique()):
             df_s = plot_laps[plot_laps['Stint'] == stint]
-            color = TYRE_COLORS.get(df_s['Tyre'].iloc[0], '#ffffff')
+            tyre = df_s['Tyre'].iloc[0]
+            color = TYRE_COLORS.get(tyre, '#ffffff')
+            sym = symbols[i % len(symbols)]
+            
             fig.add_trace(go.Scatter(
                 x=df_s['LapNumber'], y=df_s['LapTime_s'], mode='lines+markers',
-                marker=dict(size=6), line=dict(color=color, width=2),
-                name=f"Stint {stint} ({df_s['Tyre'].iloc[0]})",
+                marker=dict(symbol=sym, size=10, line=dict(width=1.5, color='#ffffff'), opacity=0.9),
+                line=dict(color=color, width=3, dash='solid'),
+                name=f"Stint {stint} ({tyre})",
                 text=df_s['HoverText'], hovertemplate="%{text}<extra></extra>"
             ), row=1, col=1)
     else:
-        for drv in plot_laps['Driver'].unique():
+        for i, drv in enumerate(plot_laps['Driver'].unique()):
             df_d = plot_laps[plot_laps['Driver'] == drv]
             color = get_accurate_driver_color(drv, results_df)
+            sym = symbols[i % len(symbols)]
+            dash = dashes[(i // 2) % len(dashes)] # Alternate line dashes 
+            
             fig.add_trace(go.Scatter(
                 x=df_d['LapNumber'], y=df_d['LapTime_s'], mode='lines+markers',
-                marker=dict(size=4), line=dict(color=color, width=1.5),
-                name=drv, text=df_d['HoverText'], hovertemplate="%{text}<extra></extra>"
+                marker=dict(symbol=sym, size=8, line=dict(width=1.2, color='#ffffff'), color=color, opacity=0.9),
+                line=dict(color=color, width=2.5, dash=dash),
+                name=f"<b>{drv}</b>", text=df_d['HoverText'], hovertemplate="%{text}<extra></extra>"
             ), row=1, col=1)
             
     if 'TrackTemp' in plot_laps.columns:
@@ -200,35 +205,19 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
     else:
         env_df = plot_laps.groupby('LapNumber').agg({'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
 
-    weather_color_map = {
-        1: 'rgba(255, 215, 0, 0.7)',    
-        2: 'rgba(150, 150, 150, 0.7)',  
-        3: 'rgba(77, 184, 255, 0.8)',   
-        4: 'rgba(0, 85, 255, 0.9)'      
-    }
-    w_colors = env_df['W_Level'].map(weather_color_map).tolist()
-
+    weather_color_map = {1: 'rgba(255, 215, 0, 0.7)', 2: 'rgba(150, 150, 150, 0.7)', 3: 'rgba(77, 184, 255, 0.8)', 4: 'rgba(0, 85, 255, 0.9)'}
     fig.add_trace(go.Bar(
         x=env_df['LapNumber'], y=env_df['W_Level'],
-        marker_color=w_colors, marker_line_width=0, width=1,
-        customdata=env_df['W_Desc'],
-        hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
+        marker_color=env_df['W_Level'].map(weather_color_map).tolist(), marker_line_width=0, width=1,
+        customdata=env_df['W_Desc'], hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
         showlegend=False
     ), row=2, col=1)
-
-    unique_w_levels = env_df['W_Level'].unique()
-    if 1 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.7)", size=12, symbol="square"), name="Clear / Dry"))
-    if 2 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(150, 150, 150, 0.7)", size=12, symbol="square"), name="Cool / Overcast"))
-    if 3 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(77, 184, 255, 0.8)", size=12, symbol="square"), name="Wet / Damp"))
-    if 4 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(0, 85, 255, 0.9)", size=12, symbol="square"), name="Heavy Rain"))
 
     if show_annotations:
         all_laps = session.laps
         has_sc, has_vsc, has_red = False, False, False
-        
         for lap in all_laps['LapNumber'].dropna().unique():
             stat = "".join(all_laps[all_laps['LapNumber'] == lap]['TrackStatus'].dropna().astype(str).tolist())
-            
             if '4' in stat: 
                 has_sc = True
                 fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(255, 215, 0, 0.12)", layer="below", line_width=0, row=1, col=1)
@@ -243,29 +232,8 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
         if has_vsc: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 165, 0, 0.4)", size=12, symbol="square"), name="Virtual SC"))
         if has_red: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.4)", size=12, symbol="square"), name="Red Flag"))
         
-        if hasattr(session, 'race_control_messages'):
-            rcm = session.race_control_messages
-            if rcm is not None and not rcm.empty:
-                ref_laps = session.laps.pick_driver(selected_driver if selected_driver != "ALL" else results_df.iloc[0]['Abbreviation'])
-                ref_laps = ref_laps.sort_values('LapStartDate').dropna(subset=['LapStartDate', 'LapNumber'])
-                
-                for _, msg in rcm.iterrows():
-                    text = str(msg['Message']).upper()
-                    if "PENALTY" in text or "BLACK AND WHITE" in text:
-                        if selected_driver != "ALL" and selected_driver not in text: continue
-                        
-                        idx = ref_laps['LapStartDate'].searchsorted(msg['Time'])
-                        if 0 < idx < len(ref_laps):
-                            lap_num = ref_laps.iloc[idx]['LapNumber']
-                            color = "#e8002d" if "PENALTY" in text else "#ffffff"
-                            fig.add_vline(x=lap_num, line=dict(color=color, width=1.5, dash='dashdot'),
-                                          annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
-                                          annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
-                                          
-        # Draw Pit Stops with distinct driver colors and no text
         for _, row in pit_map.iterrows():
-            if selected_driver != "ALL" and row['Driver'] != selected_driver:
-                continue
+            if selected_driver != "ALL" and row['Driver'] != selected_driver: continue
             color = get_accurate_driver_color(row['Driver'], results_df)
             fig.add_vline(x=row['Pit Lap'], line=dict(color=color, width=2.5, dash='dot'), row=1, col=1)
 
@@ -280,50 +248,8 @@ def _race_trace_advanced(plot_laps, selected_driver, session_name, show_annotati
     return fig
 
 
-# ─────────────────────────────────────────────────────────────
-#  ADVANCED QUALIFYING TRACE
-# ─────────────────────────────────────────────────────────────
 def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annotations, session, results_df):
-    def get_weather_state(row):
-        rain = row.get('Rainfall', False)
-        temp = row.get('TrackTemp', 30.0)
-        status = str(row.get('TrackStatus', '1'))
-        if rain:
-            if '4' in status or '5' in status: return 4, "Heavy Rain / SC"
-            return 3, "Wet"
-        else:
-            if temp < 25.0: return 2, "Cool / Overcast"
-            return 1, "Clear / Dry"
-
-    weather_res = plot_laps.apply(get_weather_state, axis=1)
-    plot_laps['W_Level'] = [x[0] for x in weather_res]
-    plot_laps['W_Desc'] = [x[1] for x in weather_res]
-    
-    def create_hover(row):
-        def c(val, sb, pb):
-            if pd.isna(val) or val <= 0: return "⚪"
-            if abs(val - sb) < 0.001: return "🟣"
-            if abs(val - pb) < 0.001: return "🟢"
-            return "🟡"
-            
-        s1 = c(row['Sector1_s'], row['Session_S1'], row['PB_S1'])
-        s2 = c(row['Sector2_s'], row['Session_S2'], row['PB_S2'])
-        s3 = c(row['Sector3_s'], row['Session_S3'], row['PB_S3'])
-        
-        t1 = f"{row['Sector1_s']:.3f}" if pd.notna(row['Sector1_s']) else "N/A"
-        t2 = f"{row['Sector2_s']:.3f}" if pd.notna(row['Sector2_s']) else "N/A"
-        t3 = f"{row['Sector3_s']:.3f}" if pd.notna(row['Sector3_s']) else "N/A"
-        tt = f"{row.get('TrackTemp', 'N/A')}°C"
-        
-        return (f"<b>{row['Driver']}</b> - Lap {int(row['LapNumber'])}<br>"
-                f"Time: <b>{row['LapTime_str']}</b><br>"
-                f"Tyre: {row['Tyre']}<br><br>"
-                f"S1: {t1} {s1}<br>"
-                f"S2: {t2} {s2}<br>"
-                f"S3: {t3} {s3}<br><br>"
-                f"Track Temp: {tt}")
-
-    plot_laps['HoverText'] = plot_laps.apply(create_hover, axis=1)
+    plot_laps = _create_hover_text(plot_laps.copy())
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
@@ -331,32 +257,36 @@ def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annot
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
-    # Scatter plot for Qualifying
+    symbols = ['circle', 'diamond', 'square', 'triangle-up', 'hexagon', 'star', 'cross']
+
     if selected_driver != "ALL":
-        for tyre in plot_laps['Tyre'].unique():
+        for i, tyre in enumerate(plot_laps['Tyre'].unique()):
             df_t = plot_laps[plot_laps['Tyre'] == tyre]
             color = TYRE_COLORS.get(tyre, '#ffffff')
+            sym = symbols[i % len(symbols)]
+            
             fig.add_trace(go.Scatter(
                 x=df_t['LapNumber'], y=df_t['LapTime_s'], mode='markers',
-                marker=dict(size=11, line=dict(width=1, color='rgba(255,255,255,0.2)'), color=color),
-                name=tyre, text=df_t['HoverText'], hovertemplate="%{text}<extra></extra>"
+                marker=dict(symbol=sym, size=12, line=dict(width=1.5, color='#ffffff'), color=color, opacity=0.9),
+                name=f"<b>{tyre}</b>", text=df_t['HoverText'], hovertemplate="%{text}<extra></extra>"
             ), row=1, col=1)
     else:
-        for drv in plot_laps['Driver'].unique():
+        for i, drv in enumerate(plot_laps['Driver'].unique()):
             df_d = plot_laps[plot_laps['Driver'] == drv]
             color = get_accurate_driver_color(drv, results_df)
+            sym = symbols[i % len(symbols)]
+            
             fig.add_trace(go.Scatter(
                 x=df_d['LapNumber'], y=df_d['LapTime_s'], mode='markers',
-                marker=dict(size=9, line=dict(width=1, color='rgba(255,255,255,0.2)'), color=color),
-                name=drv, text=df_d['HoverText'], hovertemplate="%{text}<extra></extra>"
+                marker=dict(symbol=sym, size=11, line=dict(width=1.5, color='#ffffff'), color=color, opacity=0.9),
+                name=f"<b>{drv}</b>", text=df_d['HoverText'], hovertemplate="%{text}<extra></extra>"
             ), row=1, col=1)
             
-    # Dirty Air Overlay
     dirty_laps = plot_laps[plot_laps['Is_Dirty_Air'] == True]
     if not dirty_laps.empty:
         fig.add_trace(go.Scatter(
             x=dirty_laps['LapNumber'], y=dirty_laps['LapTime_s'], mode='markers',
-            marker=dict(size=14, color='rgba(150, 150, 150, 0.4)', line=dict(width=1.5, color='white')),
+            marker=dict(size=16, color='rgba(150, 150, 150, 0.2)', line=dict(width=1.5, color='rgba(255,255,255,0.8)')),
             name='Traffic / Dirty Air', hoverinfo='skip'
         ), row=1, col=1)
 
@@ -370,32 +300,17 @@ def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annot
     else:
         env_df = plot_laps.groupby('LapNumber').agg({'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
 
-    weather_color_map = {
-        1: 'rgba(255, 215, 0, 0.7)',    
-        2: 'rgba(150, 150, 150, 0.7)',  
-        3: 'rgba(77, 184, 255, 0.8)',   
-        4: 'rgba(0, 85, 255, 0.9)'      
-    }
-    w_colors = env_df['W_Level'].map(weather_color_map).tolist()
-
+    weather_color_map = {1: 'rgba(255, 215, 0, 0.7)', 2: 'rgba(150, 150, 150, 0.7)', 3: 'rgba(77, 184, 255, 0.8)', 4: 'rgba(0, 85, 255, 0.9)'}
     fig.add_trace(go.Bar(
         x=env_df['LapNumber'], y=env_df['W_Level'],
-        marker_color=w_colors, marker_line_width=0, width=1,
+        marker_color=env_df['W_Level'].map(weather_color_map).tolist(), marker_line_width=0, width=1,
         customdata=env_df['W_Desc'], hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
         showlegend=False
     ), row=2, col=1)
 
-    unique_w_levels = env_df['W_Level'].unique()
-    if 1 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.7)", size=12, symbol="square"), name="Clear / Dry"))
-    if 2 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(150, 150, 150, 0.7)", size=12, symbol="square"), name="Cool / Overcast"))
-    if 3 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(77, 184, 255, 0.8)", size=12, symbol="square"), name="Wet / Damp"))
-    if 4 in unique_w_levels: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(0, 85, 255, 0.9)", size=12, symbol="square"), name="Heavy Rain"))
-
     if show_annotations:
         all_laps = session.laps
         has_red = False
-        
-        # Red flags are most critical in Qualifying
         for lap in all_laps['LapNumber'].dropna().unique():
             stat = "".join(all_laps[all_laps['LapNumber'] == lap]['TrackStatus'].dropna().astype(str).tolist())
             if '5' in stat: 
@@ -403,31 +318,8 @@ def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annot
                 fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
         
         if has_red: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.4)", size=12, symbol="square"), name="Red Flag"))
-        
-        if hasattr(session, 'race_control_messages'):
-            rcm = session.race_control_messages
-            if rcm is not None and not rcm.empty:
-                ref_laps = session.laps.pick_driver(selected_driver if selected_driver != "ALL" else results_df.iloc[0]['Abbreviation'])
-                ref_laps = ref_laps.sort_values('LapStartDate').dropna(subset=['LapStartDate', 'LapNumber'])
-                
-                for _, msg in rcm.iterrows():
-                    text = str(msg['Message']).upper()
-                    # Included 'DELETED' specifically for Track Limits violations in Quali
-                    if "PENALTY" in text or "DELETED" in text or "BLACK AND WHITE" in text:
-                        if selected_driver != "ALL" and selected_driver not in text: continue
-                        
-                        idx = ref_laps['LapStartDate'].searchsorted(msg['Time'])
-                        if 0 < idx < len(ref_laps):
-                            lap_num = ref_laps.iloc[idx]['LapNumber']
-                            color = "#e8002d" if ("PENALTY" in text or "DELETED" in text) else "#ffffff"
-                            clean_text = text.replace("TIME PENALTY", "PENALTY").replace("CAR ", "").replace("LAP TIME DELETED", "DELETED")
-                            
-                            fig.add_vline(x=lap_num, line=dict(color=color, width=1.5, dash='dashdot'),
-                                          annotation_text=clean_text,
-                                          annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
 
     title = f"Qualifying Trace & Environmental Data · {selected_driver if selected_driver != 'ALL' else session_name}"
-    
     fig.update_layout(title=title, hovermode="x unified", height=700, bargap=0)
     fig.update_yaxes(title_text="Lap Time (s)", row=1, col=1, secondary_y=False)
     fig.update_yaxes(title_text="Track Temp (°C)", row=1, col=1, secondary_y=True, showgrid=False)
@@ -438,7 +330,7 @@ def _quali_scatter_advanced(plot_laps, selected_driver, session_name, show_annot
 
 
 # ─────────────────────────────────────────────────────────────
-#  METRIC CARDS & DISTRIBUTION (Unchanged below)
+#  METRIC CARDS & DISTRIBUTION (Unchanged)
 # ─────────────────────────────────────────────────────────────
 def _render_driver_metrics(laps, fastest_overall, session, driver, results_df):
     best = laps['LapTime_s'].min()

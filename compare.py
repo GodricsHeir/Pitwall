@@ -35,7 +35,6 @@ def _get_distinct_colors(drivers, results_df):
     """Ensures teammates have distinct colors to avoid messy dashed lines."""
     used = set()
     colors = {}
-    # Stark neon palette for clashes
     fallbacks = ['#00e5ff', '#df4bff', '#00d47e', '#ff6b35', '#ffd700', '#ffffff', '#ff00ff']
     for d in drivers:
         c = str(get_accurate_driver_color(d, results_df)).lower()
@@ -60,7 +59,6 @@ def _to_rgba(hex_color, alpha=0.15):
     return f"rgba(255, 255, 255, {alpha})"
 
 def enrich_telemetry(telemetry_df, lap_obj=None):
-    """Adds RPM handling, precise LapTime Zeros, and calculates Long/Lat G-Force."""
     if telemetry_df is None or telemetry_df.empty:
         return telemetry_df
         
@@ -72,7 +70,6 @@ def enrich_telemetry(telemetry_df, lap_obj=None):
         if 'Time' in telemetry_df.columns:
             telemetry_df['Time_s'] = telemetry_df['Time'].dt.total_seconds()
             
-            # Perfect LapTime elapsed calculation anchored to official start line trigger
             if lap_obj is not None and 'SessionTime' in telemetry_df.columns and pd.notna(lap_obj.get('LapStartTime')):
                 telemetry_df['LapTime_s'] = (telemetry_df['SessionTime'] - lap_obj['LapStartTime']).dt.total_seconds()
             else:
@@ -101,33 +98,22 @@ def enrich_telemetry(telemetry_df, lap_obj=None):
     return telemetry_df
 
 def calculate_ghost_delta(ref_tel, comp_tel, ref_lap, comp_lap):
-    """
-    Computes a mathematically flawless time delta array.
-    Anchors to precise LapStartTime and applies a linear drift correction
-    to ensure the delta ends exactly on the official timing gap.
-    """
     try:
         ref_dist = ref_tel['Distance'].values
         comp_dist = comp_tel['Distance'].values
         
-        # Default fallback elapsed times
         ref_elapsed = ref_tel['Time_s'].values - ref_tel['Time_s'].values[0]
         comp_elapsed = comp_tel['Time_s'].values - comp_tel['Time_s'].values[0]
         
-        # Try to get absolute precise elapsed times
         if 'SessionTime' in ref_tel.columns and pd.notna(ref_lap.get('LapStartTime')):
             ref_elapsed = (ref_tel['SessionTime'] - ref_lap['LapStartTime']).dt.total_seconds().values
         if 'SessionTime' in comp_tel.columns and pd.notna(comp_lap.get('LapStartTime')):
             comp_elapsed = (comp_tel['SessionTime'] - comp_lap['LapStartTime']).dt.total_seconds().values
             
-        # Make compare strictly monotonic by distance for interpolation
         df_comp = pd.DataFrame({'d': comp_dist, 't': comp_elapsed}).drop_duplicates('d').sort_values('d')
-        
-        # Ghost car time delta
         comp_interp_t = np.interp(ref_dist, df_comp['d'], df_comp['t'], left=np.nan, right=np.nan)
         raw_delta = comp_interp_t - ref_elapsed
         
-        # Linear Drift Correction to match official lap times
         ref_lt = ref_lap.get('LapTime')
         comp_lt = comp_lap.get('LapTime')
         
@@ -136,13 +122,10 @@ def calculate_ghost_delta(ref_tel, comp_tel, ref_lap, comp_lap):
             off_comp = comp_lt.total_seconds()
             off_delta = off_comp - off_ref
             
-            # Find the last non-NaN delta
             valid_indices = np.where(~np.isnan(raw_delta))[0]
             if len(valid_indices) > 0:
                 last_idx = valid_indices[-1]
                 drift = raw_delta[last_idx] - off_delta
-                
-                # Apply linear correction from start (0 drift) to end (full drift)
                 correction = np.linspace(0, drift, len(raw_delta))
                 return raw_delta - correction
                 
@@ -162,7 +145,6 @@ def render_comparison(year, race, session_id, session_name, selected_drivers):
     section_header("HEAD-TO-HEAD", f"{year} {race}  ·  {session_name}")
     st.markdown(f"#### {title_str}")
 
-    # ── 1. LOAD DATA & WEATHER ───────────────────────────
     session, laps, err = safe_load_session(year, race, session_id, telemetry=True, weather=True, messages=True)
     if err:
         no_data_error(err)
@@ -171,17 +153,14 @@ def render_comparison(year, race, session_id, session_name, selected_drivers):
     results_df = getattr(session, 'results', pd.DataFrame())
     drv_colors = _get_distinct_colors(selected_drivers, results_df)
 
-    # ── 1.5 MERGE WEATHER DATA SAFELY ────────────────────
     if not laps.empty:
         try:
             weather_df = laps.get_weather_data()
             for col in weather_df.columns:
                 if col not in laps.columns:
                     laps[col] = weather_df[col].values
-        except Exception:
-            pass 
+        except Exception: pass 
 
-    # ── 1.6 LIVE TIMING & DIRTY AIR ENGINE ───────────────
     laps_sorted = laps.dropna(subset=['Time']).sort_values('Time').copy()
     
     for col in ['Sector1Time', 'Sector2Time', 'Sector3Time']:
@@ -215,11 +194,9 @@ def render_comparison(year, race, session_id, session_name, selected_drivers):
         no_data_error("No valid lap data for selected drivers.")
         return
 
-    # ── 2. METRIC CARDS ──────────────────────────────────
     _render_driver_cards(comp, fastest_overall, session, selected_drivers, drv_colors, results_df)
     st.divider()
 
-    # ── 3. CHARTS ────────────────────────────────────────
     comp_pure = comp[~comp['Is_Pit_Lap']].copy()
     is_race = session_id in ['R', 'S', 'SQ']
 
@@ -233,30 +210,25 @@ def render_comparison(year, race, session_id, session_name, selected_drivers):
     fig.update_layout(**PLOTLY_THEME)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 4. SIDE-BY-SIDE DISTRIBUTION ─────────────────────
     if is_race:
         st.divider()
         section_header("DISTRIBUTION", "Lap Time Distribution by Driver")
         _render_distribution(comp_pure, selected_drivers, drv_colors)
 
-    # ── 5. LAP-BY-LAP DELTA ──────────────────────────────
     if is_race and len(selected_drivers) == 2:
         st.divider()
         section_header("DELTA", f"{selected_drivers[0]} vs {selected_drivers[1]} — Lap Delta")
         _render_lap_delta(comp_pure, selected_drivers, drv_colors)
 
-    # ── 6. STINT TABLE ───────────────────────────────────
     st.divider()
     section_header("ANALYTICS", "Direct Stint Comparison")
     _render_stint_table(comp_pure, pit_map, fastest_overall)
 
-    # ── 7. FASTEST LAP TELEMETRY COMPARISON ──────────────
     st.divider()
     section_header("TELEMETRY", "Fastest Lap Comparison")
     with st.spinner("Extracting multi-driver telemetry..."):
         _render_telemetry_comparison(session, selected_drivers, drv_colors)
 
-    # ── 8. MINISECTOR TRACK MAP COMPARISON ───────────────
     st.divider()
     section_header("TRACK MAP", "Mini-Sector Dominance Circuit Layout")
     with st.spinner("Generating spatial mini-sector tracking..."):
@@ -318,29 +290,34 @@ def _race_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_m
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
-    symbols = ['circle', 'square', 'diamond', 'cross', 'x', 'triangle-up']
+    symbols = ['circle', 'diamond', 'square', 'triangle-up', 'hexagon', 'star']
+    dashes = ['solid', 'dash', 'dot', 'longdash', 'dashdot']
     
     for i, drv in enumerate(drivers):
         drv_sym = symbols[i % len(symbols)]
+        drv_dash = dashes[(i // 2) % len(dashes)]
         drv_df = comp[comp['Driver'] == drv]
         
         for stint in drv_df['Stint'].unique():
             df_s = drv_df[drv_df['Stint'] == stint]
             tyre = df_s['Tyre'].iloc[0]
+            
+            # Map Driver Color to Line, and Tyre Color to the marker's inside
             color = drv_colors[drv]
+            tyre_color = TYRE_COLORS.get(tyre, '#ffffff')
             
             fig.add_trace(go.Scatter(
                 x=df_s['LapNumber'], y=df_s['LapTime_s'], mode='lines+markers',
-                line=dict(color=color, width=2.5, dash='solid'),
-                marker=dict(symbol=drv_sym, size=8, color=color, line=dict(width=1, color='rgba(255,255,255,0.4)')),
-                name=f"{drv} ({tyre})", text=df_s['HoverText'], hovertemplate="%{text}<extra></extra>", legendgroup=drv
+                line=dict(color=color, width=2.5, dash=drv_dash),
+                marker=dict(symbol=drv_sym, size=10, color=tyre_color, opacity=0.9, line=dict(width=2, color=color)),
+                name=f"<b>{drv}</b> ({tyre})", text=df_s['HoverText'], hovertemplate="%{text}<extra></extra>", legendgroup=drv
             ), row=1, col=1)
 
     dirty_laps = comp[comp['Is_Dirty_Air'] == True]
     if not dirty_laps.empty:
         fig.add_trace(go.Scatter(
             x=dirty_laps['LapNumber'], y=dirty_laps['LapTime_s'], mode='markers',
-            marker=dict(size=12, color='rgba(150, 150, 150, 0.6)', line=dict(width=1.5, color='white')),
+            marker=dict(size=14, color='rgba(150, 150, 150, 0.2)', line=dict(width=1.5, color='rgba(255,255,255,0.8)')),
             name='Traffic / Dirty Air', hoverinfo='skip'
         ), row=1, col=1)
 
@@ -355,51 +332,19 @@ def _race_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_m
         env_df = comp.groupby('LapNumber').agg({'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
 
     weather_color_map = {1: 'rgba(255, 215, 0, 0.7)', 2: 'rgba(150, 150, 150, 0.7)', 3: 'rgba(77, 184, 255, 0.8)', 4: 'rgba(0, 85, 255, 0.9)'}
-    w_colors = env_df['W_Level'].map(weather_color_map).tolist()
-
     fig.add_trace(go.Bar(
         x=env_df['LapNumber'], y=env_df['W_Level'],
-        marker_color=w_colors, marker_line_width=0, width=1,
+        marker_color=env_df['W_Level'].map(weather_color_map).tolist(), marker_line_width=0, width=1,
         customdata=env_df['W_Desc'], hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
         showlegend=False
     ), row=2, col=1)
 
     all_laps = session.laps
-    has_sc, has_vsc, has_red = False, False, False
-    
     for lap in all_laps['LapNumber'].dropna().unique():
         stat = "".join(all_laps[all_laps['LapNumber'] == lap]['TrackStatus'].dropna().astype(str).tolist())
-        if '4' in stat: 
-            has_sc = True
-            fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(255, 215, 0, 0.12)", layer="below", line_width=0, row=1, col=1)
-        elif '6' in stat: 
-            has_vsc = True
-            fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(255, 165, 0, 0.15)", layer="below", line_width=0, row=1, col=1)
-        elif '5' in stat: 
-            has_red = True
-            fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
-            
-    if has_sc: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 215, 0, 0.4)", size=12, symbol="square"), name="Safety Car"))
-    if has_vsc: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(255, 165, 0, 0.4)", size=12, symbol="square"), name="Virtual SC"))
-    if has_red: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.4)", size=12, symbol="square"), name="Red Flag"))
-    
-    if hasattr(session, 'race_control_messages'):
-        rcm = session.race_control_messages
-        if rcm is not None and not rcm.empty:
-            ref_laps = session.laps.pick_driver(drivers[0] if drivers else results_df.iloc[0]['Abbreviation'])
-            ref_laps = ref_laps.sort_values('LapStartDate').dropna(subset=['LapStartDate', 'LapNumber'])
-            
-            for _, msg in rcm.iterrows():
-                text = str(msg['Message']).upper()
-                if "PENALTY" in text or "BLACK AND WHITE" in text:
-                    if not any(d in text for d in drivers): continue
-                    idx = ref_laps['LapStartDate'].searchsorted(msg['Time'])
-                    if 0 < idx < len(ref_laps):
-                        lap_num = ref_laps.iloc[idx]['LapNumber']
-                        color = "#e8002d" if "PENALTY" in text else "#ffffff"
-                        fig.add_vline(x=lap_num, line=dict(color=color, width=1.5, dash='dashdot'),
-                                      annotation_text=text.replace("TIME PENALTY", "PENALTY").replace("CAR ", ""),
-                                      annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
+        if '4' in stat: fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(255, 215, 0, 0.12)", layer="below", line_width=0, row=1, col=1)
+        elif '6' in stat: fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(255, 165, 0, 0.15)", layer="below", line_width=0, row=1, col=1)
+        elif '5' in stat: fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
                                       
     for _, row in pit_map[pit_map['Driver'].isin(drivers)].iterrows():
         p_color = drv_colors.get(row['Driver'], '#ffffff')
@@ -429,7 +374,7 @@ def _quali_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
     )
 
-    symbols = ['circle', 'square', 'diamond', 'cross', 'x', 'triangle-up']
+    symbols = ['circle', 'diamond', 'square', 'triangle-up', 'hexagon', 'star']
     
     for i, drv in enumerate(drivers):
         drv_sym = symbols[i % len(symbols)]
@@ -437,19 +382,21 @@ def _quali_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_
         
         for tyre in drv_df['Tyre'].unique():
             df_t = drv_df[drv_df['Tyre'] == tyre]
+            
             color = drv_colors[drv]
+            tyre_color = TYRE_COLORS.get(tyre, '#ffffff')
             
             fig.add_trace(go.Scatter(
                 x=df_t['LapNumber'], y=df_t['LapTime_s'], mode='markers',
-                marker=dict(symbol=drv_sym, size=12, color=color, line=dict(width=1, color='rgba(255,255,255,0.4)')),
-                name=f"{drv} ({tyre})", text=df_t['HoverText'], hovertemplate="%{text}<extra></extra>", legendgroup=drv
+                marker=dict(symbol=drv_sym, size=12, color=tyre_color, opacity=0.9, line=dict(width=2, color=color)),
+                name=f"<b>{drv}</b> ({tyre})", text=df_t['HoverText'], hovertemplate="%{text}<extra></extra>", legendgroup=drv
             ), row=1, col=1)
 
     dirty_laps = comp[comp['Is_Dirty_Air'] == True]
     if not dirty_laps.empty:
         fig.add_trace(go.Scatter(
             x=dirty_laps['LapNumber'], y=dirty_laps['LapTime_s'], mode='markers',
-            marker=dict(size=15, color='rgba(150, 150, 150, 0.4)', line=dict(width=1.5, color='white')),
+            marker=dict(size=16, color='rgba(150, 150, 150, 0.2)', line=dict(width=1.5, color='rgba(255,255,255,0.8)')),
             name='Traffic / Dirty Air', hoverinfo='skip'
         ), row=1, col=1)
 
@@ -464,45 +411,17 @@ def _quali_comparison_chart(comp, drivers, session, drv_colors, results_df, pit_
         env_df = comp.groupby('LapNumber').agg({'W_Level': 'max', 'W_Desc': 'first'}).reset_index()
 
     weather_color_map = {1: 'rgba(255, 215, 0, 0.7)', 2: 'rgba(150, 150, 150, 0.7)', 3: 'rgba(77, 184, 255, 0.8)', 4: 'rgba(0, 85, 255, 0.9)'}
-    w_colors = env_df['W_Level'].map(weather_color_map).tolist()
-
     fig.add_trace(go.Bar(
         x=env_df['LapNumber'], y=env_df['W_Level'],
-        marker_color=w_colors, marker_line_width=0, width=1,
+        marker_color=env_df['W_Level'].map(weather_color_map).tolist(), marker_line_width=0, width=1,
         customdata=env_df['W_Desc'], hovertemplate="Lap %{x}<br>Weather: <b>%{customdata}</b><extra></extra>",
         showlegend=False
     ), row=2, col=1)
 
     all_laps = session.laps
-    has_red = False
-    
     for lap in all_laps['LapNumber'].dropna().unique():
         stat = "".join(all_laps[all_laps['LapNumber'] == lap]['TrackStatus'].dropna().astype(str).tolist())
-        if '5' in stat: 
-            has_red = True
-            fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
-            
-    if has_red: fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color="rgba(232, 0, 45, 0.4)", size=12, symbol="square"), name="Red Flag"))
-    
-    if hasattr(session, 'race_control_messages'):
-        rcm = session.race_control_messages
-        if rcm is not None and not rcm.empty:
-            ref_laps = session.laps.pick_driver(drivers[0] if drivers else results_df.iloc[0]['Abbreviation'])
-            ref_laps = ref_laps.sort_values('LapStartDate').dropna(subset=['LapStartDate', 'LapNumber'])
-            
-            for _, msg in rcm.iterrows():
-                text = str(msg['Message']).upper()
-                if "PENALTY" in text or "DELETED" in text or "BLACK AND WHITE" in text:
-                    if not any(d in text for d in drivers): continue
-                    idx = ref_laps['LapStartDate'].searchsorted(msg['Time'])
-                    if 0 < idx < len(ref_laps):
-                        lap_num = ref_laps.iloc[idx]['LapNumber']
-                        color = "#e8002d" if ("PENALTY" in text or "DELETED" in text) else "#ffffff"
-                        clean_text = text.replace("TIME PENALTY", "PENALTY").replace("CAR ", "").replace("LAP TIME DELETED", "DELETED")
-                        
-                        fig.add_vline(x=lap_num, line=dict(color=color, width=1.5, dash='dashdot'),
-                                      annotation_text=clean_text,
-                                      annotation_font=dict(size=9, color=color), annotation_textangle=-90, row=1, col=1)
+        if '5' in stat: fig.add_vrect(x0=lap-0.5, x1=lap+0.5, fillcolor="rgba(232, 0, 45, 0.2)", layer="below", line_width=0, row=1, col=1)
 
     fig.update_layout(
         title="Head-to-Head Qualifying Trace", hovermode="x unified", height=700, bargap=0, margin=dict(t=100),
