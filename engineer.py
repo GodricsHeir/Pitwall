@@ -55,6 +55,14 @@ def _to_rgba(hex_color, alpha=0.15):
     except: pass
     return f"rgba(255, 255, 255, {alpha})"
 
+def get_compass_arrow(wind_dir_deg):
+    """Converts wind direction degrees into a visual compass arrow."""
+    if pd.isna(wind_dir_deg): return ""
+    blow_to = (wind_dir_deg + 180) % 360 # Calculate direction wind is blowing TO
+    arrows = ['↓', '↙', '←', '↖', '↑', '↗', '→', '↘', '↓']
+    idx = int(round(blow_to / 45.0))
+    return arrows[idx]
+
 def enrich_telemetry(telemetry_df, lap_obj=None):
     if telemetry_df is None or telemetry_df.empty:
         return telemetry_df
@@ -85,13 +93,26 @@ def enrich_telemetry(telemetry_df, lap_obj=None):
                     dy_s = telemetry_df['Y'].rolling(5, center=True).mean().diff()
                     ddx = dx_s.diff()
                     ddy = dy_s.diff()
+                    
+                    # Calculate Curvature (inverse of radius)
                     curvature = (dx_s * ddy - dy_s * ddx) / ((dx_s**2 + dy_s**2)**1.5 + 1e-6)
+                    
+                    # Synthesize Steering Angle (F1 Wheelbase ~3.6m, Steering Ratio ~14:1)
+                    telemetry_df['Steering'] = np.degrees(np.arctan(3.6 * curvature)) * 14.0
+                    telemetry_df['Steering'] = telemetry_df['Steering'].clip(-180, 180).rolling(5, center=True).mean().fillna(0)
+                    
+                    # Calculate Lateral G-Force
                     lat_g = ((telemetry_df['Speed_ms']**2) * curvature) / 9.81
                     telemetry_df['Lat_G'] = lat_g.clip(-5.5, 5.5).rolling(5, center=True).mean().fillna(0)
-                else: telemetry_df['Lat_G'] = 0
-            else: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
-        else: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
-    except: telemetry_df['Long_G'], telemetry_df['Lat_G'] = 0, 0
+                else: 
+                    telemetry_df['Lat_G'] = 0
+                    telemetry_df['Steering'] = 0
+            else: 
+                telemetry_df['Long_G'], telemetry_df['Lat_G'], telemetry_df['Steering'] = 0, 0, 0
+        else: 
+            telemetry_df['Long_G'], telemetry_df['Lat_G'], telemetry_df['Steering'] = 0, 0, 0
+    except: 
+        telemetry_df['Long_G'], telemetry_df['Lat_G'], telemetry_df['Steering'] = 0, 0, 0
         
     return telemetry_df
 
@@ -167,6 +188,9 @@ def _render_status_bubble(lap_data, weather_data=None):
     
     is_wet = False
     track_temp = None
+    wind_spd = None
+    wind_dir = None
+    
     if weather_data is not None and not weather_data.empty:
         lap_time = lap_data.get('Time')
         if pd.notna(lap_time):
@@ -175,10 +199,13 @@ def _render_status_bubble(lap_data, weather_data=None):
                 closest_weather = weather_data.loc[idx]
                 is_wet = closest_weather.get('Rainfall', False)
                 track_temp = closest_weather.get('TrackTemp')
+                wind_spd = closest_weather.get('WindSpeed')
+                wind_dir = closest_weather.get('WindDirection')
             except Exception: pass
 
     weather = "🌧️ WET" if is_wet else "☀️ DRY"
     temp_html = f'<span style="color:#ffffff; font-size:0.95rem; align-self:center; font-weight:800; margin-left:8px;">TRACK: {track_temp:.1f}°C</span>' if pd.notna(track_temp) else ""
+    wind_html = f'<span style="color:#ffffff; font-size:0.95rem; align-self:center; font-weight:800; margin-left:8px;">WIND: {wind_spd:.1f}m/s {get_compass_arrow(wind_dir)}</span>' if pd.notna(wind_spd) else ""
     
     return f"""
     <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:15px; font-family:'JetBrains Mono',monospace;">
@@ -186,6 +213,7 @@ def _render_status_bubble(lap_data, weather_data=None):
         <span style="color:#4db8ff; border:2px solid #4db8ff; padding:6px 14px; border-radius:6px; font-size:0.9rem; font-weight:800; background:rgba(77,184,255,0.15);">{weather}</span>
         <span style="color:{t_color}; border:2px solid {t_color}; padding:6px 14px; border-radius:6px; font-size:0.9rem; font-weight:800; background:{t_color}25;">{comp} (L{age})</span>
         {temp_html}
+        {wind_html}
     </div>
     """
 
@@ -196,8 +224,8 @@ def _apply_strong_axes(fig):
 
 def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, selected_lap_num, eng_driver, session, d_color):
     fig = make_subplots(
-        rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-        row_heights=[0.16, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
+        rows=9, cols=1, shared_xaxes=True, vertical_spacing=0.018,
+        row_heights=[0.16, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105]
     )
     
     fastest_lap_num = int(fastest_lap['LapNumber'])
@@ -206,17 +234,19 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
     ref_dist = tel_fast['Distance'] if not tel_fast.empty else pd.Series()
     if not ref_dist.empty and not tel_target.empty:
         delta_val = calculate_ghost_delta(tel_fast, tel_target, fastest_lap, target_lap)
-        fig.add_trace(go.Scatter(x=ref_dist, y=np.zeros(len(ref_dist)), name="Best Delta", line=dict(color='rgba(255,255,255,0.6)', width=2, dash='dash'), showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=ref_dist, y=np.zeros(len(ref_dist)), name="Best Delta", line=dict(color='rgba(255,255,255,0.6)', width=2, dash='solid'), showlegend=False), row=2, col=1)
         fig.add_trace(go.Scatter(x=ref_dist, y=delta_val, name="Target Delta", line=dict(color=d_color, width=2.5), showlegend=False, hovertemplate="<b>Delta:</b> %{y:+.3f}s<extra></extra>", fill='tozeroy', fillcolor=_to_rgba(d_color, 0.15)), row=2, col=1)
 
     def add_tel_traces(row_num, col_name, is_fastest=False, is_step=False):
         if is_fastest:
-            color, width, dash = 'rgba(255, 255, 255, 0.65)', 2.5, 'dash'
+            # Continuous grey line for Benchmark in Single Driver mode
+            color, width, dash = 'rgba(180, 180, 180, 0.7)', 2.0, 'solid'
             trace_name, tel_data = f"<b>Best</b> (Lap {fastest_lap_num})", tel_fast
             fill_mode = None
         else:
             if col_name == 'Speed': color = '#00e5ff'      
             elif col_name == 'Throttle': color = '#00d47e' 
+            elif col_name == 'Steering': color = '#ffeb3b' # Bright yellow for steering
             elif col_name == 'Brake': color = '#e8002d'    
             elif col_name == 'nGear': color = '#ffd700'    
             elif col_name == 'RPM': color = '#df4bff'      
@@ -254,17 +284,20 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
                     showlegend=False, hoverinfo='skip'
                 ), row=row_num, col=1)
 
+    # Shifted Steering Below Throttle
     add_tel_traces(1, 'Speed', is_fastest=True); add_tel_traces(1, 'Speed')
     add_tel_traces(3, 'Throttle', is_fastest=True); add_tel_traces(3, 'Throttle')
-    add_tel_traces(4, 'Brake', is_fastest=True); add_tel_traces(4, 'Brake')
-    add_tel_traces(5, 'nGear', is_fastest=True, is_step=True); add_tel_traces(5, 'nGear', is_step=True)
-    add_tel_traces(6, 'RPM', is_fastest=True); add_tel_traces(6, 'RPM')
-    add_tel_traces(7, 'Long_G', is_fastest=True); add_tel_traces(7, 'Long_G')
-    add_tel_traces(8, 'Lat_G', is_fastest=True); add_tel_traces(8, 'Lat_G')
+    add_tel_traces(4, 'Steering', is_fastest=True); add_tel_traces(4, 'Steering') 
+    add_tel_traces(5, 'Brake', is_fastest=True); add_tel_traces(5, 'Brake')
+    add_tel_traces(6, 'nGear', is_fastest=True, is_step=True); add_tel_traces(6, 'nGear', is_step=True)
+    add_tel_traces(7, 'RPM', is_fastest=True); add_tel_traces(7, 'RPM')
+    add_tel_traces(8, 'Long_G', is_fastest=True); add_tel_traces(8, 'Long_G')
+    add_tel_traces(9, 'Lat_G', is_fastest=True); add_tel_traces(9, 'Lat_G')
 
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=2, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=7, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=8, col=1)
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=4, col=1) # Steering line
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=8, col=1) # Long G line
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=9, col=1) # Lat G line
 
     try:
         time_col = 'SessionTime' if 'SessionTime' in tel_fast.columns else 'Time'
@@ -292,7 +325,7 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
     except Exception: pass
 
     fig.update_layout(
-        **PLOTLY_THEME, height=1450, title=f"<b>Telemetry Comparison: Lap {selected_lap_num} vs Fastest Lap ({fastest_lap_num})</b>",
+        **PLOTLY_THEME, height=1600, title=f"<b>Telemetry Comparison: Lap {selected_lap_num} vs Fastest Lap ({fastest_lap_num})</b>",
         hovermode="x unified", margin=dict(t=110),
         legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1, bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.4)", borderwidth=1, font=dict(size=14, color="white"))
     )
@@ -301,19 +334,20 @@ def _plot_single_telemetry(tel_fast, tel_target, fastest_lap, target_lap, select
     fig.update_yaxes(title_text="<b>Speed (km/h)</b>", row=1, col=1)
     fig.update_yaxes(title_text="<b>Delta (s)</b>", row=2, col=1)
     fig.update_yaxes(title_text="<b>Throttle %</b>", row=3, col=1, range=[-5, 105])
-    fig.update_yaxes(title_text="<b>Brake</b>", row=4, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
-    fig.update_yaxes(title_text="<b>Gear</b>", row=5, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
-    fig.update_yaxes(title_text="<b>RPM</b>", row=6, col=1)
-    fig.update_yaxes(title_text="<b>Long. G</b>", row=7, col=1, range=[-6, 3])
-    fig.update_yaxes(title_text="<b>Lat. G</b>", row=8, col=1, range=[-5.5, 5.5])
-    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=8, col=1)
+    fig.update_yaxes(title_text="<b>Steering (°)</b>", row=4, col=1) 
+    fig.update_yaxes(title_text="<b>Brake</b>", row=5, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
+    fig.update_yaxes(title_text="<b>Gear</b>", row=6, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
+    fig.update_yaxes(title_text="<b>RPM</b>", row=7, col=1)
+    fig.update_yaxes(title_text="<b>Long. G</b>", row=8, col=1)
+    fig.update_yaxes(title_text="<b>Lat. G</b>", row=9, col=1) 
+    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=9, col=1)
 
     return fig
 
 def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_tel, drv_colors):
     fig = make_subplots(
-        rows=8, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-        row_heights=[0.16, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
+        rows=9, cols=1, shared_xaxes=True, vertical_spacing=0.018,
+        row_heights=[0.16, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105, 0.105]
     )
     
     ref_dist = ref_tel['Distance'] if not ref_tel.empty else pd.Series()
@@ -361,17 +395,19 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
             
             add_multi_trace(1, 'Speed')
             add_multi_trace(3, 'Throttle')
-            add_multi_trace(4, 'Brake')
-            add_multi_trace(5, 'nGear', is_step=True)
-            add_multi_trace(6, 'RPM')
-            add_multi_trace(7, 'Long_G')
-            add_multi_trace(8, 'Lat_G')
+            add_multi_trace(4, 'Steering') # Shifted below Throttle
+            add_multi_trace(5, 'Brake')
+            add_multi_trace(6, 'nGear', is_step=True)
+            add_multi_trace(7, 'RPM')
+            add_multi_trace(8, 'Long_G')
+            add_multi_trace(9, 'Lat_G')
             
         except Exception: continue
 
     fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=2, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=7, col=1)
-    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=8, col=1)
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=4, col=1) # Steering line
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=8, col=1) # Long G line
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(255, 255, 255, 0.4)", line_width=2, row=9, col=1) # Lat G line
 
     # ── SECTOR SHADING & CORNER ANNOTATIONS ──
     try:
@@ -402,7 +438,7 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
 
     ref_drv_name = list(target_laps_dict.keys())[0] if target_laps_dict else "Reference"
     fig.update_layout(
-        **PLOTLY_THEME, height=1450, title=f"<b>Multi-Driver Telemetry Overlay (Aligned to {ref_drv_name})</b>",
+        **PLOTLY_THEME, height=1600, title=f"<b>Multi-Driver Telemetry Overlay (Aligned to {ref_drv_name})</b>",
         hovermode="x unified", margin=dict(t=110),
         legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1, bgcolor="rgba(19, 19, 26, 0.95)", bordercolor="rgba(255,255,255,0.4)", borderwidth=1, font=dict(size=14, color="white"))
     )
@@ -411,12 +447,13 @@ def _plot_multi_telemetry(session, target_laps_dict, results_df, ref_lap, ref_te
     fig.update_yaxes(title_text="<b>Speed (km/h)</b>", row=1, col=1)
     fig.update_yaxes(title_text="<b>Delta (s)</b>", row=2, col=1)
     fig.update_yaxes(title_text="<b>Throttle %</b>", row=3, col=1, range=[-5, 105])
-    fig.update_yaxes(title_text="<b>Brake</b>", row=4, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
-    fig.update_yaxes(title_text="<b>Gear</b>", row=5, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
-    fig.update_yaxes(title_text="<b>RPM</b>", row=6, col=1)
-    fig.update_yaxes(title_text="<b>Long. G</b>", row=7, col=1, range=[-6, 3])
-    fig.update_yaxes(title_text="<b>Lat. G</b>", row=8, col=1, range=[-5.5, 5.5])
-    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=8, col=1)
+    fig.update_yaxes(title_text="<b>Steering (°)</b>", row=4, col=1) 
+    fig.update_yaxes(title_text="<b>Brake</b>", row=5, col=1, range=[-0.1, 1.2], tickvals=[0, 1])
+    fig.update_yaxes(title_text="<b>Gear</b>", row=6, col=1, range=[0, 9], tickvals=[1,2,3,4,5,6,7,8])
+    fig.update_yaxes(title_text="<b>RPM</b>", row=7, col=1)
+    fig.update_yaxes(title_text="<b>Long. G</b>", row=8, col=1)
+    fig.update_yaxes(title_text="<b>Lat. G</b>", row=9, col=1) 
+    fig.update_xaxes(title_text="<b>Track Distance (m)</b>", row=9, col=1)
 
     return fig
 
