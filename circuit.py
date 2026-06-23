@@ -65,9 +65,104 @@ FAMOUS_CORNERS = {
     "Miami": {11: "Turn 11 (Stadium)", 17: "Turn 17 (Hairpin)"}
 }
 
+# Baseline cache up to 2025 to prevent 5-minute historical load sweeps
+BASELINE_RECORDS = {
+    "BAHRAIN": {"Race": "1:31.447<br><span style='font-size:0.8rem; color:#888;'>Pedro de la Rosa (2005)</span>", "Quali": "1:27.264<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2020)</span>"},
+    "JEDDAH": {"Race": "1:30.734<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2021)</span>", "Quali": "1:27.294<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2025)</span>"},
+    "MELBOURNE": {"Race": "1:19.813<br><span style='font-size:0.8rem; color:#888;'>Charles Leclerc (2024)</span>", "Quali": "1:15.096<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2025)</span>"},
+    "ALBERT PARK": {"Race": "1:19.813<br><span style='font-size:0.8rem; color:#888;'>Charles Leclerc (2024)</span>", "Quali": "1:15.096<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2025)</span>"},
+    "SUZUKA": {"Race": "1:30.965<br><span style='font-size:0.8rem; color:#888;'>Kimi Antonelli (2025)</span>", "Quali": "1:26.983<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2025)</span>"},
+    "SHANGHAI": {"Race": "1:32.238<br><span style='font-size:0.8rem; color:#888;'>Michael Schumacher (2004)</span>", "Quali": "1:30.641<br><span style='font-size:0.8rem; color:#888;'>Oscar Piastri (2025)</span>"},
+    "MIAMI": {"Race": "1:29.708<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2023)</span>", "Quali": "1:26.204<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2025)</span>"},
+    "IMOLA": {"Race": "1:15.484<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2020)</span>", "Quali": "1:13.609<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2020)</span>"},
+    "MONTE CARLO": {"Race": "1:12.909<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2021)</span>", "Quali": "1:09.954<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2025)</span>"},
+    "MONACO": {"Race": "1:12.909<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2021)</span>", "Quali": "1:09.954<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2025)</span>"},
+    "MONTRÉAL": {"Race": "1:13.078<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2019)</span>", "Quali": "1:10.240<br><span style='font-size:0.8rem; color:#888;'>Sebastian Vettel (2019)</span>"},
+    "MONTREAL": {"Race": "1:13.078<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2019)</span>", "Quali": "1:10.240<br><span style='font-size:0.8rem; color:#888;'>Sebastian Vettel (2019)</span>"},
+    "BARCELONA": {"Race": "1:15.743<br><span style='font-size:0.8rem; color:#888;'>Oscar Piastri (2025)</span>", "Quali": "1:11.383<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2024)</span>"},
+    "SPIELBERG": {"Race": "1:05.619<br><span style='font-size:0.8rem; color:#888;'>Carlos Sainz (2020)</span>", "Quali": "1:02.939<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2020)</span>"},
+    "SILVERSTONE": {"Race": "1:27.097<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2020)</span>", "Quali": "1:24.303<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2020)</span>"},
+    "BUDAPEST": {"Race": "1:16.627<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2020)</span>", "Quali": "1:13.447<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2020)</span>"},
+    "SPA-FRANCORCHAMPS": {"Race": "1:44.701<br><span style='font-size:0.8rem; color:#888;'>Sergio Perez (2024)</span>", "Quali": "1:40.501<br><span style='font-size:0.8rem; color:#888;'>Oscar Piastri (2025)</span>"},
+    "ZANDVOORT": {"Race": "1:11.097<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2021)</span>", "Quali": "1:08.662<br><span style='font-size:0.8rem; color:#888;'>Oscar Piastri (2025)</span>"},
+    "MONZA": {"Race": "1:20.901<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2025)</span>", "Quali": "1:18.792<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2025)</span>"},
+    "BAKU": {"Race": "1:43.009<br><span style='font-size:0.8rem; color:#888;'>Charles Leclerc (2019)</span>", "Quali": "1:40.203<br><span style='font-size:0.8rem; color:#888;'>Charles Leclerc (2023)</span>"},
+    "MARINA BAY": {"Race": "1:33.808<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2025)</span>", "Quali": "1:29.158<br><span style='font-size:0.8rem; color:#888;'>George Russell (2025)</span>"},
+    "AUSTIN": {"Race": "1:36.169<br><span style='font-size:0.8rem; color:#888;'>Charles Leclerc (2019)</span>", "Quali": "1:32.029<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2019)</span>"},
+    "MEXICO CITY": {"Race": "1:17.774<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2021)</span>", "Quali": "1:14.758<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2019)</span>"},
+    "SÃO PAULO": {"Race": "1:10.540<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2018)</span>", "Quali": "1:07.281<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2018)</span>"},
+    "SAO PAULO": {"Race": "1:10.540<br><span style='font-size:0.8rem; color:#888;'>Valtteri Bottas (2018)</span>", "Quali": "1:07.281<br><span style='font-size:0.8rem; color:#888;'>Lewis Hamilton (2018)</span>"},
+    "LAS VEGAS": {"Race": "1:33.365<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2025)</span>", "Quali": "1:32.312<br><span style='font-size:0.8rem; color:#888;'>George Russell (2024)</span>"},
+    "LUSAIL": {"Race": "1:22.384<br><span style='font-size:0.8rem; color:#888;'>Lando Norris (2024)</span>", "Quali": "1:19.387<br><span style='font-size:0.8rem; color:#888;'>George Russell (2025)</span>"},
+    "YAS ISLAND": {"Race": "1:25.637<br><span style='font-size:0.8rem; color:#888;'>Kevin Magnussen (2024)</span>", "Quali": "1:22.109<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2021)</span>"},
+    "ABU DHABI": {"Race": "1:25.637<br><span style='font-size:0.8rem; color:#888;'>Kevin Magnussen (2024)</span>", "Quali": "1:22.109<br><span style='font-size:0.8rem; color:#888;'>Max Verstappen (2021)</span>"}
+}
+
 # ─────────────────────────────────────────────────────────────
 #  UTILITIES & COLOR LOGIC
 # ─────────────────────────────────────────────────────────────
+def __parse_to_seconds(time_str):
+    """Safely converts string lap records to numeric seconds for comparison."""
+    if pd.isna(time_str): return 9999
+    if isinstance(time_str, pd.Timedelta): return time_str.total_seconds()
+    try:
+        parts = str(time_str).split(':')
+        return float(parts[0]) * 60 + float(parts[1])
+    except:
+        return 9999
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _get_records_for_track(location, current_year):
+    """
+    Intelligent caching logic: Uses a heavily seeded historical database up to 2025 
+    to avoid impossible execution times from scanning all past F1 years. It then 
+    connects to FastF1 to dynamically scan *only* the current selected year to check 
+    if a newer record was set, merging the result.
+    """
+    base = BASELINE_RECORDS.get(location.upper(), {"Race": "Data not available", "Quali": "Data not available"})
+    rec_r = base["Race"]
+    rec_q = base["Quali"]
+    
+    if current_year > 2025:
+        try:
+            sched = fastf1.get_event_schedule(current_year)
+            past_events = sched[(sched['Location'].str.upper() == location.upper()) & (sched['EventDate'] < pd.Timestamp.now())]
+            
+            if not past_events.empty:
+                event = past_events.iloc[0]
+                
+                # Check Qualifying for Outright Record
+                try:
+                    q = fastf1.get_session(current_year, event['RoundNumber'], 'Q')
+                    q.load(telemetry=False, weather=False, messages=False)
+                    q_fastest = q.laps.pick_fastest()
+                    if not pd.isna(q_fastest['LapTime']):
+                        q_sec = q_fastest['LapTime'].total_seconds()
+                        base_sec = __parse_to_seconds(rec_q.split('<br>')[0])
+                        
+                        if q_sec < base_sec:
+                            time_str = f"{int(q_sec // 60)}:{q_sec % 60 :06.3f}"
+                            rec_q = f"{time_str}<br><span style='font-size:0.8rem; color:#888;'>{q_fastest['Driver']} ({current_year})</span>"
+                except: pass
+                
+                # Check Race for Official Record
+                try:
+                    r = fastf1.get_session(current_year, event['RoundNumber'], 'R')
+                    r.load(telemetry=False, weather=False, messages=False)
+                    r_fastest = r.laps.pick_fastest()
+                    if not pd.isna(r_fastest['LapTime']):
+                        r_sec = r_fastest['LapTime'].total_seconds()
+                        base_sec = __parse_to_seconds(rec_r.split('<br>')[0])
+                        
+                        if r_sec < base_sec:
+                            time_str = f"{int(r_sec // 60)}:{r_sec % 60 :06.3f}"
+                            rec_r = f"{time_str}<br><span style='font-size:0.8rem; color:#888;'>{r_fastest['Driver']} ({current_year})</span>"
+                except: pass
+        except:
+            pass
+            
+    return rec_r, rec_q
+
 def get_compass_arrow(wind_dir_deg):
     if pd.isna(wind_dir_deg): return ""
     blow_to = (wind_dir_deg + 180) % 360
@@ -323,10 +418,51 @@ def render_static_track_map(tel, ref_lap, circuit_info, session):
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ─────────────────────────────────────────────────────────────
-#  JSON COMPILER FOR JS WIDESCREEN TABLE (CRASH-PROOF CACHE)
-# ─────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=3600)
+def render_track_info_panel(session, tel, circuit_info, year):
+    # Calculate Track Length
+    try:
+        length_km = tel['Distance'].max() / 1000
+    except:
+        length_km = 0.0
+        
+    # Calculate Corners
+    try:
+        num_corners = len(circuit_info.corners)
+    except:
+        num_corners = 0
+        
+    # Retrieve Cached Records
+    loc = str(session.event.get('Location', '')).upper()
+    race_rec, quali_rec = _get_records_for_track(loc, year)
+
+    # By concatenating strings in parenthesis, there are ZERO newlines (\n).
+    # Streamlit cannot parse this as a markdown code block.
+    html_content = (
+        "<div style='background: #13131a; border: 1px solid #2a2a38; border-radius: 6px; padding: 20px; height: 550px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px;'>"
+        "<h4 style='color: white; margin: 0; padding-bottom: 12px; border-bottom: 1px solid #2a2a38; font-family: \"Exo 2\", sans-serif; text-transform: uppercase; letter-spacing: 1px;'>Circuit Info</h4>"
+        "<div>"
+        "<div style='color: #8888a0; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;'>Track Length</div>"
+        f"<div style='color: #00d47e; font-size: 2rem; font-weight: 800; font-family: \"JetBrains Mono\", monospace; line-height: 1.1;'>{length_km:.3f} <span style='font-size: 1rem; color: #8888a0;'>km</span></div>"
+        "</div>"
+        "<div>"
+        "<div style='color: #8888a0; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;'>Number of Corners</div>"
+        f"<div style='color: #ffd700; font-size: 2rem; font-weight: 800; font-family: \"JetBrains Mono\", monospace; line-height: 1.1;'>{num_corners}</div>"
+        "</div>"
+        "<div style='margin-top: auto; background: #0d0d0f; padding: 15px; border-radius: 6px; border: 1px solid #2a2a38;'>"
+        "<div style='margin-bottom: 15px;'>"
+        "<div style='color: #8888a0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; margin-bottom: 6px;'>🏆 Official Race Record</div>"
+        f"<div style='color: #e8e8f0; font-size: 1.05rem; font-weight: 700; font-family: \"JetBrains Mono\", monospace;'>{race_rec}</div>"
+        "</div>"
+        "<div>"
+        "<div style='color: #8888a0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; margin-bottom: 6px;'>🚀 Absolute/Quali Record</div>"
+        f"<div style='color: #e8e8f0; font-size: 1.05rem; font-weight: 700; font-family: \"JetBrains Mono\", monospace;'>{quali_rec}</div>"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
+
+    st.markdown(html_content, unsafe_allow_html=True)
+    
 def compile_table_payload(year, race, session_id, available_drivers, _session, _results_df, _laps):
     max_laps = int(_laps['LapNumber'].max()) if not _laps.empty else 0
     stats, pb_dict = [], {}
@@ -843,8 +979,14 @@ def render_circuit(year, race, session_id, session_name, available_drivers):
     st.divider()
     section_header("SESSION DASHBOARD", "Interactive Track Walk & Lap-by-Lap Replay")
 
-    # Native Streamlit Map Plot
-    render_static_track_map(tel, ref_lap, circuit_info, session)
+    # Native Streamlit Map Plot with Info Panel Column Overlay
+    col_map, col_info = st.columns([3, 1])
+
+    with col_map:
+        render_static_track_map(tel, ref_lap, circuit_info, session)
+        
+    with col_info:
+        render_track_info_panel(session, tel, circuit_info, year)
 
     if available_drivers:
         with st.spinner("Preloading vector telemetry & wind physics (Takes ~10s)..."):
